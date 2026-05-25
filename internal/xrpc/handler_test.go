@@ -167,6 +167,7 @@ func TestRegisterPushNoAuth(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/xrpc/app.bsky.notification.registerPush", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("CF-Connecting-IP", "203.0.113.1") // pass the CF gate so the test exercises the missing-auth path
 	// No auth header
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
@@ -772,6 +773,68 @@ func TestRegisterPush_RejectsMissingCFConnectingIP(t *testing.T) {
 
 	if w.Code != 401 {
 		t.Errorf("expected 401 when CF-Connecting-IP is missing, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHealthEndpoint_RejectsMissingCFConnectingIP(t *testing.T) {
+	// In production mode, a direct-Fly-IP probe to /health must be rejected
+	// before any store stats are exposed.
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	s, _ := store.New(dbPath)
+	defer s.Close()
+	h := NewHandlerWithoutStats(s, false, "did:web:push.example.org")
+
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux, "did:web:push.example.org")
+
+	req := httptest.NewRequest("GET", "/health", nil)
+	req.RemoteAddr = "203.0.113.1:12345" // public address, not loopback
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != 403 {
+		t.Errorf("expected 403 when CF-Connecting-IP missing on /health, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHealthEndpoint_AllowsLoopback(t *testing.T) {
+	// `fly ssh console -C 'wget ... http://localhost:8080/health'` must work
+	// for operator debugging — loopback bypasses the CF gate.
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	s, _ := store.New(dbPath)
+	defer s.Close()
+	h := NewHandlerWithoutStats(s, false, "did:web:push.example.org")
+
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux, "did:web:push.example.org")
+
+	req := httptest.NewRequest("GET", "/health", nil)
+	req.RemoteAddr = "127.0.0.1:54321"
+	// deliberately NOT setting CF-Connecting-IP
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Errorf("expected 200 on /health from loopback, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestDIDDocument_RejectsMissingCFConnectingIP(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	s, _ := store.New(dbPath)
+	defer s.Close()
+	h := NewHandlerWithoutStats(s, false, "did:web:push.example.org")
+
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux, "did:web:push.example.org")
+
+	req := httptest.NewRequest("GET", "/.well-known/did.json", nil)
+	req.RemoteAddr = "203.0.113.1:12345"
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != 403 {
+		t.Errorf("expected 403 when CF-Connecting-IP missing on /.well-known/did.json, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

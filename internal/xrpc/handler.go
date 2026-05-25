@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -77,6 +78,10 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, serviceDID string) {
 
 	// DID Document
 	mux.HandleFunc("GET /.well-known/did.json", func(w http.ResponseWriter, r *http.Request) {
+		if err := h.requireCloudflareTransit(r); err != nil {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -94,6 +99,10 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, serviceDID string) {
 
 	// Health check
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		if err := h.requireCloudflareTransit(r); err != nil {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
 		tokens, blocks, dids := h.store.GetStats()
 		result := map[string]interface{}{
 			"status":         "ok",
@@ -223,12 +232,8 @@ func (h *Handler) handleUnregisterPush(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) verifyAuth(r *http.Request, expectedLXM string) (string, error) {
-	// Reject traffic that did not transit Cloudflare. CF always populates
-	// CF-Connecting-IP on proxied requests; a direct hit to the Fly origin
-	// (e.g. `curl --resolve push.nubecita.app:443:<fly-ip>`) won't have it,
-	// which would otherwise bypass CF's rate limit. Skipped in dev mode.
-	if !h.devMode && r.Header.Get("CF-Connecting-IP") == "" {
-		return "", fmt.Errorf("request did not transit Cloudflare")
+	if err := h.requireCloudflareTransit(r); err != nil {
+		return "", err
 	}
 
 	if h.devMode {
@@ -352,6 +357,39 @@ func (h *Handler) verifyAuth(r *http.Request, expectedLXM string) (string, error
 
 	log.Printf("[xrpc] JWT signature verified for %s (alg=%s)", claims.Iss, header.Alg)
 	return claims.Iss, nil
+}
+
+// requireCloudflareTransit is a SOFT check that the request came in through
+// Cloudflare. CF always sets CF-Connecting-IP on proxied requests, so a
+// direct hit to the Fly origin (e.g. `curl --resolve push.nubecita.app:443:<fly-ip>`)
+// won't have it. An attacker who knows this can trivially forge the header
+// on a direct connection — the check raises the bar against naive probes,
+// not against a determined attacker. For a strong guarantee, front the
+// origin with Cloudflare Tunnel or require an authenticated-origin secret.
+//
+// Bypassed when:
+//   - devMode is on (local dev / tests)
+//   - the request came from loopback (operator debug via `fly ssh` + localhost)
+func (h *Handler) requireCloudflareTransit(r *http.Request) error {
+	if h.devMode {
+		return nil
+	}
+	if isLoopbackAddr(r.RemoteAddr) {
+		return nil
+	}
+	if r.Header.Get("CF-Connecting-IP") == "" {
+		return fmt.Errorf("request did not transit Cloudflare")
+	}
+	return nil
+}
+
+func isLoopbackAddr(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // verifyECDSASignature verifies an ECDSA signature in the JWS format (r || s concatenation).
