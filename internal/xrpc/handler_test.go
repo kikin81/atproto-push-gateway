@@ -419,6 +419,13 @@ func TestRegisterPush_AcceptsCorrectAud(t *testing.T) {
 	if w.Code != 200 {
 		t.Errorf("expected 200 with correct aud, got %d: %s", w.Code, w.Body.String())
 	}
+	// Body must be `{}` so kotlinx-serialization UnitResponseSerializer can decode.
+	if got := w.Body.String(); got != "{}" {
+		t.Errorf("expected body %q, got %q", "{}", got)
+	}
+	if got := w.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("expected Content-Type %q, got %q", "application/json", got)
+	}
 	if !s.IsRegistered("did:plc:alice") {
 		t.Error("expected did:plc:alice to be registered")
 	}
@@ -513,6 +520,13 @@ func TestUnregisterPush_AcceptsCorrectLXM(t *testing.T) {
 
 	if w.Code != 200 {
 		t.Errorf("expected 200 with correct lxm, got %d: %s", w.Code, w.Body.String())
+	}
+	// Body must be `{}` so kotlinx-serialization UnitResponseSerializer can decode.
+	if got := w.Body.String(); got != "{}" {
+		t.Errorf("expected body %q, got %q", "{}", got)
+	}
+	if got := w.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("expected Content-Type %q, got %q", "application/json", got)
 	}
 	if s.IsRegistered("did:plc:alice") {
 		t.Error("expected did:plc:alice to be unregistered")
