@@ -223,6 +223,14 @@ func (h *Handler) handleUnregisterPush(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) verifyAuth(r *http.Request, expectedLXM string) (string, error) {
+	// Reject traffic that did not transit Cloudflare. CF always populates
+	// CF-Connecting-IP on proxied requests; a direct hit to the Fly origin
+	// (e.g. `curl --resolve push.nubecita.app:443:<fly-ip>`) won't have it,
+	// which would otherwise bypass CF's rate limit. Skipped in dev mode.
+	if !h.devMode && r.Header.Get("CF-Connecting-IP") == "" {
+		return "", fmt.Errorf("request did not transit Cloudflare")
+	}
+
 	if h.devMode {
 		// In dev mode, accept a simple X-Actor-DID header for testing
 		did := r.Header.Get("X-Actor-DID")
