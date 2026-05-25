@@ -179,7 +179,11 @@ func (h *Handler) handleRegisterPush(w http.ResponseWriter, r *http.Request) {
 	if h.onTokenRegistered != nil {
 		h.onTokenRegistered()
 	}
-	w.WriteHeader(http.StatusOK)
+	// Lexicon declares no output schema; emit `{}` rather than an empty body so
+	// kotlinx-serialization–based clients (atproto-kotlin's UnitResponseSerializer)
+	// can decode a Unit response. Spec-tolerant clients accept both.
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte("{}"))
 }
 
 func (h *Handler) handleUnregisterPush(w http.ResponseWriter, r *http.Request) {
@@ -228,7 +232,11 @@ func (h *Handler) handleUnregisterPush(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("[xrpc] unregistered token for %s (%s/%s)", actorDID, req.Platform, req.AppID)
-	w.WriteHeader(http.StatusOK)
+	// Lexicon declares no output schema; emit `{}` rather than an empty body so
+	// kotlinx-serialization–based clients (atproto-kotlin's UnitResponseSerializer)
+	// can decode a Unit response. Spec-tolerant clients accept both.
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte("{}"))
 }
 
 func (h *Handler) verifyAuth(r *http.Request, expectedLXM string) (string, error) {
