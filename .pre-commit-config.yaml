@@ -33,9 +33,16 @@ repos:
     hooks:
       - id: go-mod-tidy
       - id: go-build
-      - id: golangci-lint
       - id: docker-lint
       - id: docker-compose-lint
+  # Official golangci-lint hook (self-contained: builds itself via the Go from
+  # .go-version). Used instead of turo/pre-commit-hooks' golangci-lint, which is
+  # a thin wrapper expecting the binary already on PATH (action-setup-tools
+  # installs Go but not golangci-lint). Mirrors tagoro9/fotingo.
+  - repo: https://github.com/golangci/golangci-lint
+    rev: v2.12.2
+    hooks:
+      - id: golangci-lint-full
   - repo: https://github.com/jumanjihouse/pre-commit-hooks
     rev: 3.0.0
     hooks:
