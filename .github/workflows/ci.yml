@@ -12,15 +12,23 @@ permissions:
   contents: read
 
 jobs:
-  # Runs pre-commit (see .pre-commit-config.yaml) — gofmt, go-vet, golangci-lint,
-  # go-mod-tidy, go-build, hadolint, actionlint, commitlint, etc. — installing Go
-  # from .go-version via action-setup-tools.
+  # Runs pre-commit (see .pre-commit-config.yaml) — go-vet, golangci-lint,
+  # go-mod-tidy, go-build, hadolint, actionlint, commitlint, etc.
+  #
+  # Composed from the open-turo building blocks (action-setup-tools installs Go
+  # from .go-version; action-pre-commit runs the hooks) rather than the
+  # actions-go/lint wrapper: that wrapper bundles a lint-release-notes step that
+  # runs semantic-release (dry-run git push), which is incompatible with our
+  # release-please flow and needs write perms we don't grant here.
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: open-turo/actions-go/lint@v4
+      - uses: actions/checkout@v5
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # commitlint needs full history to find the commit range.
+          fetch-depth: 0
+      - uses: open-turo/action-setup-tools@v3
+      - uses: open-turo/action-pre-commit@v3
 
   # Runs all go tests with -race + coverage.
   test:
