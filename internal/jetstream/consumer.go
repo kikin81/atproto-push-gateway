@@ -277,7 +277,7 @@ func (c *Consumer) connect(url string) error {
 	defer conn.Close()
 
 	conn.SetReadLimit(wsMaxMessageBytes)
-	conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
+	_ = conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
 	conn.SetPongHandler(func(string) error {
 		return conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
 	})
@@ -394,15 +394,17 @@ func (c *Consumer) handleCommit(actorDID string, commit *CommitEvent) {
 			c.handleFollow(actorDID, commit.RKey, commit.Record)
 		}
 	case "app.bsky.graph.block":
-		if commit.Operation == "create" {
+		switch commit.Operation {
+		case "create":
 			c.handleBlockCreate(actorDID, commit.RKey, commit.Record)
-		} else if commit.Operation == "delete" {
+		case "delete":
 			c.handleBlockDelete(actorDID, commit.RKey)
 		}
 	case "app.bsky.graph.verification":
-		if commit.Operation == "create" {
+		switch commit.Operation {
+		case "create":
 			c.handleVerificationCreate(actorDID, commit.RKey, commit.Record)
-		} else if commit.Operation == "delete" {
+		case "delete":
 			c.handleVerificationDelete(actorDID, commit.RKey)
 		}
 	}
@@ -526,7 +528,10 @@ func (c *Consumer) handleBlockCreate(actorDID string, rkey string, record json.R
 
 	// Only track blocks for registered DIDs
 	if c.store.IsRegistered(actorDID) || c.store.IsRegistered(block.Subject) {
-		c.store.AddBlock(actorDID, block.Subject, rkey)
+		if err := c.store.AddBlock(actorDID, block.Subject, rkey); err != nil {
+			log.Printf("[jetstream] error adding block: %v", err)
+			return
+		}
 		log.Printf("[jetstream] block: %s blocked %s (rkey=%s)", actorDID, block.Subject, rkey)
 	}
 }
@@ -557,7 +562,10 @@ func (c *Consumer) handleVerificationCreate(verifierDID string, rkey string, rec
 	}
 
 	// Store for later deletion lookup
-	c.store.AddVerification(verifierDID, verification.Subject, rkey)
+	if err := c.store.AddVerification(verifierDID, verification.Subject, rkey); err != nil {
+		log.Printf("[jetstream] error adding verification: %v", err)
+		return
+	}
 
 	// Only notify registered DIDs
 	if !c.store.IsRegistered(verification.Subject) {

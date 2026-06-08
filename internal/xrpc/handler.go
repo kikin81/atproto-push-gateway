@@ -84,7 +84,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, serviceDID string) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"@context": []string{"https://www.w3.org/ns/did/v1"},
 			"id":       serviceDID,
 			"service": []map[string]string{
@@ -113,7 +113,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, serviceDID string) {
 		if h.statsProvider != nil {
 			result["jetstream"] = h.statsProvider()
 		}
-		json.NewEncoder(w).Encode(result)
+		_ = json.NewEncoder(w).Encode(result)
 	})
 
 	// Test endpoint (dev mode only)
@@ -183,7 +183,7 @@ func (h *Handler) handleRegisterPush(w http.ResponseWriter, r *http.Request) {
 	// kotlinx-serialization–based clients (atproto-kotlin's UnitResponseSerializer)
 	// can decode a Unit response. Spec-tolerant clients accept both.
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte("{}"))
+	_, _ = w.Write([]byte("{}"))
 }
 
 func (h *Handler) handleUnregisterPush(w http.ResponseWriter, r *http.Request) {
@@ -236,7 +236,7 @@ func (h *Handler) handleUnregisterPush(w http.ResponseWriter, r *http.Request) {
 	// kotlinx-serialization–based clients (atproto-kotlin's UnitResponseSerializer)
 	// can decode a Unit response. Spec-tolerant clients accept both.
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte("{}"))
+	_, _ = w.Write([]byte("{}"))
 }
 
 func (h *Handler) verifyAuth(r *http.Request, expectedLXM string) (string, error) {
@@ -439,7 +439,7 @@ func (h *Handler) handleTestRegister(w http.ResponseWriter, r *http.Request) {
 		h.onTokenRegistered()
 	}
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"status": "registered"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "registered"})
 }
 
 // Dev mode: trigger a test push
@@ -458,7 +458,7 @@ func (h *Handler) handleTestPush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"status": "found",
 		"tokens": len(tokens),
 	})

@@ -329,8 +329,8 @@ func makeTestKeyAndDoc(t *testing.T, didStr string) (*ecdsa.PrivateKey, *did.DID
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
 	}
-	xB64 := base64.RawURLEncoding.EncodeToString(key.PublicKey.X.FillBytes(make([]byte, 32)))
-	yB64 := base64.RawURLEncoding.EncodeToString(key.PublicKey.Y.FillBytes(make([]byte, 32)))
+	xB64 := base64.RawURLEncoding.EncodeToString(key.X.FillBytes(make([]byte, 32)))
+	yB64 := base64.RawURLEncoding.EncodeToString(key.Y.FillBytes(make([]byte, 32)))
 	doc := &did.DIDDocument{
 		ID: didStr,
 		VerificationMethod: []did.VerificationMethod{

@@ -17,6 +17,7 @@ What you expected to happen.
 Relevant log output (redact any tokens or DIDs).
 
 **Environment**
+
 - Gateway version/commit:
 - Go version:
 - OS:

@@ -9,6 +9,7 @@ This document describes which ATproto record types trigger push notifications, w
 **Trigger:** `app.bsky.feed.like` record created
 
 **Jetstream Event:**
+
 ```json
 {
   "did": "did:plc:alice",
@@ -32,6 +33,7 @@ This document describes which ATproto record types trigger push notifications, w
 **Target DID extraction:** `record.subject.uri` → authority part → `did:plc:bob`
 
 **Push Payload:**
+
 ```json
 {
   "to": "<push-token>",
@@ -53,6 +55,7 @@ This document describes which ATproto record types trigger push notifications, w
 **Trigger:** `app.bsky.feed.repost` record created
 
 **Jetstream Event:**
+
 ```json
 {
   "did": "did:plc:alice",
@@ -76,6 +79,7 @@ This document describes which ATproto record types trigger push notifications, w
 **Target DID extraction:** `record.subject.uri` → authority part → `did:plc:bob`
 
 **Push Payload:**
+
 ```json
 {
   "to": "<push-token>",
@@ -97,6 +101,7 @@ This document describes which ATproto record types trigger push notifications, w
 **Trigger:** `app.bsky.feed.post` record created with `reply` field
 
 **Jetstream Event:**
+
 ```json
 {
   "did": "did:plc:alice",
@@ -127,6 +132,7 @@ This document describes which ATproto record types trigger push notifications, w
 **Target DID extraction:** `record.reply.parent.uri` → authority part → `did:plc:bob`
 
 **Push Payload:**
+
 ```json
 {
   "to": "<push-token>",
@@ -148,6 +154,7 @@ This document describes which ATproto record types trigger push notifications, w
 **Trigger:** `app.bsky.feed.post` record created with `facets` containing `app.bsky.richtext.facet#mention`
 
 **Jetstream Event:**
+
 ```json
 {
   "did": "did:plc:alice",
@@ -159,13 +166,17 @@ This document describes which ATproto record types trigger push notifications, w
     "record": {
       "$type": "app.bsky.feed.post",
       "text": "Hey @bob check this out",
-      "facets": [{
-        "index": { "byteStart": 4, "byteEnd": 8 },
-        "features": [{
-          "$type": "app.bsky.richtext.facet#mention",
-          "did": "did:plc:bob"
-        }]
-      }],
+      "facets": [
+        {
+          "index": { "byteStart": 4, "byteEnd": 8 },
+          "features": [
+            {
+              "$type": "app.bsky.richtext.facet#mention",
+              "did": "did:plc:bob"
+            }
+          ]
+        }
+      ],
       "createdAt": "2026-04-11T12:00:00.000Z"
     }
   }
@@ -175,6 +186,7 @@ This document describes which ATproto record types trigger push notifications, w
 **Target DID extraction:** `record.facets[].features[]` where `$type === "app.bsky.richtext.facet#mention"` → `did` field
 
 **Push Payload:**
+
 ```json
 {
   "to": "<push-token>",
@@ -197,6 +209,7 @@ Note: For mentions, `uri` is the mentioning post (actor's post) and there is no 
 **Trigger:** `app.bsky.feed.post` record created with `embed.$type === "app.bsky.embed.record"` pointing to another user's post
 
 **Jetstream Event:**
+
 ```json
 {
   "did": "did:plc:alice",
@@ -224,6 +237,7 @@ Note: For mentions, `uri` is the mentioning post (actor's post) and there is no 
 **Target DID extraction:** `record.embed.record.uri` → authority part → `did:plc:bob`
 
 **Push Payload:**
+
 ```json
 {
   "to": "<push-token>",
@@ -245,6 +259,7 @@ Note: For mentions, `uri` is the mentioning post (actor's post) and there is no 
 **Trigger:** `app.bsky.graph.follow` record created
 
 **Jetstream Event:**
+
 ```json
 {
   "did": "did:plc:alice",
@@ -265,6 +280,7 @@ Note: For mentions, `uri` is the mentioning post (actor's post) and there is no 
 **Target DID extraction:** `record.subject` → `did:plc:bob`
 
 **Push Payload:**
+
 ```json
 {
   "to": "<push-token>",
@@ -285,6 +301,7 @@ Note: For mentions, `uri` is the mentioning post (actor's post) and there is no 
 **Trigger:** `app.bsky.feed.like` record created with `via` field pointing to a repost
 
 **Jetstream Event:**
+
 ```json
 {
   "did": "did:plc:alice",
@@ -314,6 +331,7 @@ Note: For mentions, `uri` is the mentioning post (actor's post) and there is no 
 **Target DID extraction:** `record.via.uri` → authority part → `did:plc:carol` (the reposter)
 
 **Push Payload:**
+
 ```json
 {
   "to": "<push-token>",
@@ -335,6 +353,7 @@ Note: For mentions, `uri` is the mentioning post (actor's post) and there is no 
 **Trigger:** `app.bsky.feed.repost` record created with `via` field pointing to another repost
 
 **Jetstream Event:**
+
 ```json
 {
   "did": "did:plc:dave",
@@ -364,6 +383,7 @@ Note: For mentions, `uri` is the mentioning post (actor's post) and there is no 
 **Target DID extraction:** `record.via.uri` → authority part → `did:plc:carol` (the original reposter)
 
 **Push Payload:**
+
 ```json
 {
   "to": "<push-token>",
@@ -385,6 +405,7 @@ Note: For mentions, `uri` is the mentioning post (actor's post) and there is no 
 **Trigger:** `app.bsky.graph.verification` record created
 
 **Jetstream Event:**
+
 ```json
 {
   "did": "did:plc:verifier-authority",
@@ -407,6 +428,7 @@ Note: For mentions, `uri` is the mentioning post (actor's post) and there is no 
 **Target DID extraction:** `record.subject` → `did:plc:bob`
 
 **Push Payload:**
+
 ```json
 {
   "to": "<push-token>",
@@ -429,6 +451,7 @@ Note: The gateway stores verification records (verifier + rkey → subject) in S
 **Trigger:** `app.bsky.graph.verification` record deleted
 
 **Jetstream Event:**
+
 ```json
 {
   "did": "did:plc:verifier-authority",
@@ -444,6 +467,7 @@ Note: The gateway stores verification records (verifier + rkey → subject) in S
 **Target DID extraction:** Looked up from stored verification records by verifier DID + rkey.
 
 **Push Payload:**
+
 ```json
 {
   "to": "<push-token>",
@@ -470,6 +494,7 @@ A user you subscribed to (via the bell icon) posted a new status.
 **Subscription API (server-side, not a record):**
 
 `app.bsky.notification.putActivitySubscription` input:
+
 ```json
 {
   "subject": "did:plc:someone",
@@ -483,6 +508,7 @@ A user you subscribed to (via the bell icon) posted a new status.
 `app.bsky.notification.listActivitySubscriptions` returns the user's subscriptions (authenticated).
 
 **How to implement (if desired):**
+
 1. Implement `app.bsky.notification.putActivitySubscription` XRPC endpoint on the gateway
 2. Store subscriptions in SQLite:
    ```sql
@@ -498,7 +524,7 @@ A user you subscribed to (via the bell icon) posted a new status.
 4. Fan out `subscribed-post` notifications to all subscribers
 5. Implement `listActivitySubscriptions` so the client can display current state
 
-**Conclusion:** Implementable but requires the gateway to become stateful for subscriptions. The client must call `putActivitySubscription` against *our* gateway (not the AppView), and the gateway must index all `app.bsky.feed.post` events for subscribed authors. This is a significant architectural addition.
+**Conclusion:** Implementable but requires the gateway to become stateful for subscriptions. The client must call `putActivitySubscription` against _our_ gateway (not the AppView), and the gateway must index all `app.bsky.feed.post` events for subscribed authors. This is a significant architectural addition.
 
 ---
 
@@ -507,6 +533,7 @@ A user you subscribed to (via the bell icon) posted a new status.
 Someone joined Bluesky via your starter pack.
 
 **Starter pack record** (`app.bsky.graph.starterpack`):
+
 ```json
 {
   "did": "did:plc:creator",
@@ -529,7 +556,8 @@ Someone joined Bluesky via your starter pack.
 }
 ```
 
-**Why not implementable via Jetstream:** The starter pack *record* is visible in Jetstream, but the *join event* is not. When a new user signs up through a starter pack link, the Bluesky server internally:
+**Why not implementable via Jetstream:** The starter pack _record_ is visible in Jetstream, but the _join event_ is not. When a new user signs up through a starter pack link, the Bluesky server internally:
+
 1. Creates the new account
 2. Adds the user to the starter pack's underlying list
 3. Synthesizes a `starterpack-joined` notification for the pack creator
@@ -555,6 +583,7 @@ A contact from your address book joined Bluesky.
 All notification types are suppressed if a block exists between the actor and the target (in either direction). Blocks are tracked in real-time via `app.bsky.graph.block` events from Jetstream.
 
 **Jetstream Event (block created):**
+
 ```json
 {
   "did": "did:plc:alice",

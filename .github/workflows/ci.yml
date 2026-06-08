@@ -6,43 +6,40 @@ on:
   pull_request:
     branches: [main]
 
+# Least-privilege default; CI only needs to read the repo. The open-turo
+# actions check out and run pre-commit / tests with this read-only token.
+permissions:
+  contents: read
+
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version: '1.25'
-
-      - name: Install dependencies
-        run: go mod download
-
-      - name: Build
-        run: go build ./cmd/server
-
-      - name: Test
-        run: go test ./... -v -count=1 -race
-
-      - name: Test with coverage
-        run: go test ./internal/did/ ./internal/jetstream/ ./internal/profile/ ./internal/store/ ./internal/xrpc/ -coverprofile=coverage.out -covermode=atomic
-
-      - name: Show coverage
-        run: go tool cover -func=coverage.out
-
+  # Runs pre-commit (see .pre-commit-config.yaml) — go-vet, golangci-lint,
+  # go-mod-tidy, go-build, hadolint, actionlint, commitlint, etc.
+  #
+  # Composed from the open-turo building blocks (action-setup-tools installs Go
+  # from .go-version; action-pre-commit runs the hooks) rather than the
+  # actions-go/lint wrapper: that wrapper bundles a lint-release-notes step that
+  # runs semantic-release (dry-run git push), which is incompatible with our
+  # release-please flow and needs write perms we don't grant here.
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-
-      - uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          # commitlint needs full history to find the commit range.
+          fetch-depth: 0
+      - uses: open-turo/action-setup-tools@v3
+      - uses: open-turo/action-pre-commit@v3
 
-      - name: Vet
-        run: go vet ./...
+  # Runs all go tests with -race + coverage.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: open-turo/actions-go/test@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
+  # Belt-and-suspenders: ensure the production image still builds (hadolint in
+  # pre-commit lints the Dockerfile, but doesn't build it).
   docker:
     runs-on: ubuntu-latest
     steps:
