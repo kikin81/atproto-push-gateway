@@ -476,11 +476,15 @@ func (c *Consumer) handlePost(actorDID string, rkey string, record json.RawMessa
 
 	postURI := fmt.Sprintf("at://%s/app.bsky.feed.post/%s", actorDID, rkey)
 
+	// Reply, quote, and mention notifications carry the notifying post's own
+	// text as the body (post.Text is already decoded from the firehose event —
+	// no extra fetch). notificationContent trims/truncates it.
+
 	// Reply
 	if post.Reply != nil {
 		targetDID := extractDIDFromURI(post.Reply.Parent.URI)
 		if targetDID != "" && targetDID != actorDID {
-			c.sendNotification(actorDID, targetDID, "reply", postURI, post.Reply.Parent.URI)
+			c.sendNotificationWithText(actorDID, targetDID, "reply", postURI, post.Reply.Parent.URI, post.Text)
 		}
 	}
 
@@ -488,7 +492,7 @@ func (c *Consumer) handlePost(actorDID string, rkey string, record json.RawMessa
 	if post.Embed != nil && post.Embed.Type == "app.bsky.embed.record" && post.Embed.Record != nil {
 		targetDID := extractDIDFromURI(post.Embed.Record.URI)
 		if targetDID != "" && targetDID != actorDID {
-			c.sendNotification(actorDID, targetDID, "quote", postURI, post.Embed.Record.URI)
+			c.sendNotificationWithText(actorDID, targetDID, "quote", postURI, post.Embed.Record.URI, post.Text)
 		}
 	}
 
@@ -496,7 +500,7 @@ func (c *Consumer) handlePost(actorDID string, rkey string, record json.RawMessa
 	for _, facet := range post.Facets {
 		for _, feature := range facet.Features {
 			if feature.Type == "app.bsky.richtext.facet#mention" && feature.DID != "" && feature.DID != actorDID {
-				c.sendNotification(actorDID, feature.DID, "mention", postURI, "")
+				c.sendNotificationWithText(actorDID, feature.DID, "mention", postURI, "", post.Text)
 			}
 		}
 	}
@@ -657,7 +661,46 @@ func formatNotification(reason, actorDisplayName, actorHandle string) (string, s
 	return title, fmt.Sprintf(template, actorName)
 }
 
+// maxBodyRunes bounds the post text we put in a notification body so the FCM
+// payload stays well under its 4 KB limit and the shade stays tidy.
+const maxBodyRunes = 200
+
+// truncateBody trims and rune-safely truncates post text for a notification
+// body. Cuts on a UTF-8 rune boundary (never mid-codepoint); appends an
+// ellipsis when shortened. Returns "" for blank input.
+func truncateBody(s string) string {
+	s = strings.TrimSpace(s)
+	r := []rune(s)
+	if len(r) <= maxBodyRunes {
+		return s
+	}
+	return string(r[:maxBodyRunes]) + "…"
+}
+
+// notificationContent builds the title, body, and (optional) data bodyText for a
+// notification. When postText is non-blank (reply/mention/quote), it renders
+// Bluesky-style: the actor+reason line becomes the TITLE and the post text the
+// BODY, and the same truncated text is returned as the data bodyText field.
+// When postText is blank (like/repost/follow, or empty post), it falls back to
+// the existing title/body and no bodyText.
+func notificationContent(reason, actorDisplayName, actorHandle, postText string) (title, body, dataBodyText string) {
+	title, body = formatNotification(reason, actorDisplayName, actorHandle)
+	text := truncateBody(postText)
+	if text == "" {
+		return title, body, ""
+	}
+	// Promote the reason line to the title; the post text is the body.
+	return body, text, text
+}
+
+// sendNotification is the body-less entry point used by like/repost/follow/
+// verification handlers. handlePost uses sendNotificationWithText to carry the
+// notifying post's text.
 func (c *Consumer) sendNotification(actorDID, targetDID, reason, recordURI, subjectURI string) {
+	c.sendNotificationWithText(actorDID, targetDID, reason, recordURI, subjectURI, "")
+}
+
+func (c *Consumer) sendNotificationWithText(actorDID, targetDID, reason, recordURI, subjectURI, postText string) {
 	if !c.store.IsRegistered(targetDID) {
 		return
 	}
@@ -682,7 +725,7 @@ func (c *Consumer) sendNotification(actorDID, targetDID, reason, recordURI, subj
 		actorDisplayName, actorHandle = c.profileResolver.ResolveProfile(actorDID)
 	}
 
-	title, body := formatNotification(reason, actorDisplayName, actorHandle)
+	title, body, dataBodyText := notificationContent(reason, actorDisplayName, actorHandle, postText)
 
 	for _, token := range tokens {
 		n := push.Notification{
@@ -701,6 +744,9 @@ func (c *Consumer) sendNotification(actorDID, targetDID, reason, recordURI, subj
 		}
 		if subjectURI != "" {
 			n.Data["subject"] = subjectURI
+		}
+		if dataBodyText != "" {
+			n.Data["bodyText"] = dataBodyText
 		}
 
 		if err := c.sender.Send(n); err != nil {
