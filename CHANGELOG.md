@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.3.0](https://github.com/kikin81/atproto-push-gateway/compare/v1.2.0...v1.3.0) (2026-06-08)
+
+
+### Features
+
+* **jetstream:** post text in reply/mention/quote notification bodies ([#3](https://github.com/kikin81/atproto-push-gateway/issues/3)) ([8156c6a](https://github.com/kikin81/atproto-push-gateway/commit/8156c6a41401c3ad1f81c7a3788a04e819a3d70c))
+
+
+### Bug Fixes
+
+* **xrpc:** require CF-Connecting-IP header on XRPC endpoints ([#1](https://github.com/kikin81/atproto-push-gateway/issues/1)) ([23ef700](https://github.com/kikin81/atproto-push-gateway/commit/23ef700c185de09d64b7bc7ba5a431bd13526c13))
+* **xrpc:** return {} on registerPush/unregisterPush success ([#2](https://github.com/kikin81/atproto-push-gateway/issues/2)) ([72d447a](https://github.com/kikin81/atproto-push-gateway/commit/72d447a5c6d13f1e48ec41165e9fb7562af7b0c0))
+
 ## [1.2.0](https://github.com/DracoBlue/atproto-push-gateway/compare/v1.1.0...v1.2.0) (2026-04-23)
 
 
