@@ -7,6 +7,7 @@ If you discover a security vulnerability in atproto-push-gateway, please report 
 **Email:** jans@dracoblue.de
 
 Please include:
+
 - Description of the vulnerability
 - Steps to reproduce
 - Potential impact
@@ -18,6 +19,7 @@ You will receive a response within 48 hours. We will work with you to understand
 ## Scope
 
 The following are in scope:
+
 - JWT verification bypass
 - Unauthorized push token registration or delivery
 - Block suppression bypass (notifications delivered despite blocks)

@@ -6,43 +6,32 @@ on:
   pull_request:
     branches: [main]
 
+# Least-privilege default; CI only needs to read the repo. The open-turo
+# actions check out and run pre-commit / tests with this read-only token.
+permissions:
+  contents: read
+
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version: '1.25'
-
-      - name: Install dependencies
-        run: go mod download
-
-      - name: Build
-        run: go build ./cmd/server
-
-      - name: Test
-        run: go test ./... -v -count=1 -race
-
-      - name: Test with coverage
-        run: go test ./internal/did/ ./internal/jetstream/ ./internal/profile/ ./internal/store/ ./internal/xrpc/ -coverprofile=coverage.out -covermode=atomic
-
-      - name: Show coverage
-        run: go tool cover -func=coverage.out
-
+  # Runs pre-commit (see .pre-commit-config.yaml) — gofmt, go-vet, golangci-lint,
+  # go-mod-tidy, go-build, hadolint, actionlint, commitlint, etc. — installing Go
+  # from .go-version via action-setup-tools.
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-go@v6
+      - uses: open-turo/actions-go/lint@v4
         with:
-          go-version: '1.25'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Vet
-        run: go vet ./...
+  # Runs all go tests with -race + coverage.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: open-turo/actions-go/test@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
+  # Belt-and-suspenders: ensure the production image still builds (hadolint in
+  # pre-commit lints the Dockerfile, but doesn't build it).
   docker:
     runs-on: ubuntu-latest
     steps:

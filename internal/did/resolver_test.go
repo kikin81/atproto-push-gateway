@@ -217,4 +217,3 @@ func base58Encode(b []byte) string {
 	}
 	return string(result)
 }
-
