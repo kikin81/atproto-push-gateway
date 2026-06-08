@@ -167,7 +167,7 @@ func (a *APNsSender) Send(n Notification) error {
 		var errResp struct {
 			Reason string `json:"reason"`
 		}
-		json.NewDecoder(resp.Body).Decode(&errResp)
+		_ = json.NewDecoder(resp.Body).Decode(&errResp)
 		// 410 Gone or reason=Unregistered → device token is permanently invalid.
 		if resp.StatusCode == 410 || errResp.Reason == "Unregistered" || errResp.Reason == "BadDeviceToken" {
 			return fmt.Errorf("%w: APNs %d %s", ErrTokenInvalid, resp.StatusCode, errResp.Reason)

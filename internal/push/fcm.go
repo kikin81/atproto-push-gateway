@@ -47,10 +47,16 @@ func newFCMSenderFromBytes(data []byte) (*FCMSender, error) {
 		return nil, fmt.Errorf("FCM service account JSON missing project_id")
 	}
 
-	creds, err := google.CredentialsFromJSON(
+	// Use the type-validated constructor (CredentialsFromJSON is deprecated for
+	// callers that may load untrusted configs). We only support service-account
+	// JSON; anything else is rejected at the credential layer.
+	creds, err := google.CredentialsFromJSONWithTypeAndParams(
 		context.Background(),
 		data,
-		"https://www.googleapis.com/auth/firebase.messaging",
+		google.ServiceAccount,
+		google.CredentialsParams{
+			Scopes: []string{"https://www.googleapis.com/auth/firebase.messaging"},
+		},
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create FCM credentials: %w", err)
@@ -144,7 +150,7 @@ func (f *FCMSender) Send(n Notification) error {
 				Status  string `json:"status"`
 			} `json:"error"`
 		}
-		json.NewDecoder(resp.Body).Decode(&errResp)
+		_ = json.NewDecoder(resp.Body).Decode(&errResp)
 		if errResp.Error.Status == "UNREGISTERED" || errResp.Error.Status == "NOT_FOUND" {
 			return fmt.Errorf("%w: FCM %s %s", ErrTokenInvalid, errResp.Error.Status, errResp.Error.Message)
 		}

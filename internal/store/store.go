@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"sync"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -155,7 +156,7 @@ func (s *Store) RegisterToken(actorDID, platform, pushToken, appID string) error
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	var existing int
 	if err := tx.QueryRow(
@@ -196,9 +197,14 @@ func (s *Store) UnregisterToken(actorDID, platform, pushToken, appID string) err
 		return err
 	}
 
-	// Check if DID still has any tokens
+	// Check if DID still has any tokens. On a scan error we leave the
+	// registeredDIDs entry intact rather than pruning it on false-zero, so a
+	// transient DB hiccup can't drop a still-registered DID from the fast path.
 	var count int
-	s.db.QueryRow("SELECT COUNT(*) FROM push_tokens WHERE actor_did = ?", actorDID).Scan(&count)
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM push_tokens WHERE actor_did = ?", actorDID).Scan(&count); err != nil {
+		log.Printf("[store] count tokens for %s: %v", actorDID, err)
+		return nil
+	}
 	if count == 0 {
 		s.mu.Lock()
 		delete(s.registeredDIDs, actorDID)
@@ -344,8 +350,12 @@ func (s *Store) IsBlocked(actorDID, targetDID string) bool {
 }
 
 func (s *Store) GetStats() (tokenCount int, blockCount int, didCount int) {
-	s.db.QueryRow("SELECT COUNT(*) FROM push_tokens").Scan(&tokenCount)
-	s.db.QueryRow("SELECT COUNT(*) FROM blocks").Scan(&blockCount)
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM push_tokens").Scan(&tokenCount); err != nil {
+		log.Printf("[store] stats: count tokens: %v", err)
+	}
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM blocks").Scan(&blockCount); err != nil {
+		log.Printf("[store] stats: count blocks: %v", err)
+	}
 	s.mu.RLock()
 	didCount = len(s.registeredDIDs)
 	s.mu.RUnlock()

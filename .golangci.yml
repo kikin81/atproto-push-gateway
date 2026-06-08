@@ -1,13 +1,10 @@
-# golangci-lint v2 — TEMPORARY BASELINE (tracked in bead nubecita-3zgt).
+# golangci-lint v2 config.
 #
-# Only linters that are clean (govet) or fully grandfathered (errcheck) on the
-# inherited DracoBlue code are enabled, so CI is green on adoption while still
-# linting new code. staticcheck (its SA bug checks + ST style + QF quick-fixes),
-# unused, and the formatters surface many findings in the existing code AND
-# auto-rewrite it (golangci-lint --fix), so they're deferred. Re-enable them one
-# at a time on a Go-equipped machine as the code is cleaned, then drop the
-# matching exclusions below — end state is the v2 default linter set with empty
-# exclusions.
+# Enables govet + errcheck + staticcheck + unused. One narrow grandfathered
+# exclusion remains (tracked in bead nubecita-3zgt): SA1019 on secp256k1.S256
+# in internal/did/resolver.go. The deprecation is about elliptic.Curve as a
+# verification interface; migrating to btcec's typed API touches signature
+# verification and warrants its own change with focused test coverage.
 version: "2"
 
 linters:
@@ -15,6 +12,8 @@ linters:
   enable:
     - govet
     - errcheck
+    - staticcheck
+    - unused
   exclusions:
     generated: lax
     # Idiomatic errcheck cases (deferred Close, response Write/Print, …).
@@ -27,8 +26,9 @@ linters:
       - path: _test\.go
         linters:
           - errcheck
-      # TEMP (nubecita-3zgt): grandfather pre-existing errcheck debt in the
-      # inherited source. Remove a path here as its swallowed errors are handled.
-      - path: internal/(jetstream/consumer|store/store|push/apns|push/fcm|xrpc/handler|xrpc/blocks|did/resolver|profile/resolver)\.go
+      # TEMP (nubecita-3zgt): secp256k1.S256() is deprecated but functional;
+      # migrating to the typed btcec API touches DID signature verification.
+      - path: internal/did/resolver\.go
         linters:
-          - errcheck
+          - staticcheck
+        text: "SA1019.*secp256k1\\.S256"
