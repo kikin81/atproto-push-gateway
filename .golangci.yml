@@ -1,0 +1,44 @@
+# golangci-lint v2 config.
+#
+# Enables govet + errcheck + staticcheck + unused. One narrow grandfathered
+# exclusion remains (tracked in bead nubecita-3zgt): SA1019 on secp256k1.S256
+# in internal/did/resolver.go. The deprecation is about elliptic.Curve as a
+# verification interface; migrating to btcec's typed API touches signature
+# verification and warrants its own change with focused test coverage.
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - unused
+  exclusions:
+    generated: lax
+    # Idiomatic errcheck cases (deferred Close, response Write/Print, …).
+    presets:
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      # Test setup intentionally ignores errors.
+      - path: _test\.go
+        linters:
+          - errcheck
+      # TEMP (nubecita-3zgt): secp256k1.S256() is deprecated but functional;
+      # migrating to the typed btcec API touches DID signature verification.
+      - path: internal/did/resolver\.go
+        linters:
+          - staticcheck
+        text: "SA1019.*secp256k1\\.S256"
+
+issues:
+  # Fork baseline. This repo is a fork of DracoBlue/atproto-push-gateway; only
+  # report issues on lines changed since the upstream release below, so lint
+  # guards OUR changes without forcing us to rewrite upstream-owned code (which
+  # would make every upstream sync conflict). SHA = upstream v1.6.0.
+  #
+  # BUMP THIS to the new upstream release commit each time we sync upstream.
+  # Requires full git history in CI (the lint job checks out with fetch-depth: 0).
+  new-from-rev: 100fd29f03348bf69491b32f461b2738bae3113d
