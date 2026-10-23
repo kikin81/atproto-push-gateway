@@ -1,5 +1,58 @@
 # Changelog
 
+## [1.7.0](https://github.com/kikin81/atproto-push-gateway/compare/v1.6.0...v1.7.0) (2026-10-23)
+
+
+### Features
+
+* include actor post text in reply/quote/mention notifications ([932ab62](https://github.com/kikin81/atproto-push-gateway/commit/932ab622273472267939b13c456d40ec7f36f002))
+* initial open-source release ([8924882](https://github.com/kikin81/atproto-push-gateway/commit/89248825611c34a001249c935be3c0aa5a35416a))
+* **jetstream:** carry actor post text as bodyText for reply/quote/mention ([89049dd](https://github.com/kikin81/atproto-push-gateway/commit/89049dd920c6b75e5b6d26c578151fa6e9c75943))
+* **jetstream:** post text in reply/mention/quote notification bodies ([#3](https://github.com/kikin81/atproto-push-gateway/issues/3)) ([8156c6a](https://github.com/kikin81/atproto-push-gateway/commit/8156c6a41401c3ad1f81c7a3788a04e819a3d70c))
+* lazy-fetch subject post text for like/repost notifications ([8e6502d](https://github.com/kikin81/atproto-push-gateway/commit/8e6502d0921cb2e33a9356d981d54b069d82f843))
+* origin-verify shared-secret middleware for CDN / WAF setups ([855246e](https://github.com/kikin81/atproto-push-gateway/commit/855246e8dacfb5c4957c08a2863c5483756d9c4b))
+* **push:** add FCM_DATA_ONLY for client-side Android localization ([4c27556](https://github.com/kikin81/atproto-push-gateway/commit/4c275565bcfa86c29743a6603e518cd80ed2f3db))
+* **push:** allow per-notification data-only delivery ([9692d15](https://github.com/kikin81/atproto-push-gateway/commit/9692d154058f06626dc8ca8011be9f21bad72572))
+* **relay:** add Fediverse Web Push relay ([7e40027](https://github.com/kikin81/atproto-push-gateway/commit/7e4002723fcd8e5f11d586b3383599094a039d14))
+* **relay:** report the wire format of incoming pushes ([9c71008](https://github.com/kikin81/atproto-push-gateway/commit/9c710088a3dc29164d549558117c2bfb84f2567d))
+* **server:** add LOG_LEVEL and cache/decompression size env vars ([fda93ff](https://github.com/kikin81/atproto-push-gateway/commit/fda93ffecbb003cc69f353ed5ccf17f87f48283a))
+* **store:** add webpush_endpoints for relay endpoint mappings ([6959296](https://github.com/kikin81/atproto-push-gateway/commit/6959296a1fccdcc5f3ead57a95721899f95cd26d))
+* trigger initial release ([fb6d2c6](https://github.com/kikin81/atproto-push-gateway/commit/fb6d2c6d4cef3f6492bb5afdd52fab3a8e892ae4))
+* **vapid:** verify RFC 8292 Authorization headers against a pinned key ([da3ba98](https://github.com/kikin81/atproto-push-gateway/commit/da3ba988240c502e03a368da0f7febec568eddd4))
+* **xrpc:** backfill historical blocks on first token registration ([bcca48b](https://github.com/kikin81/atproto-push-gateway/commit/bcca48b6f7b8723fe78c9d549fdef90dd3f76af6))
+
+
+### Bug Fixes
+
+* cap token/appId length and tokens-per-DID ([e5a5b18](https://github.com/kikin81/atproto-push-gateway/commit/e5a5b18380d9d6ebaa957e2ec551964b9b55378f))
+* cap XRPC body size and DID document size ([542c248](https://github.com/kikin81/atproto-push-gateway/commit/542c24815145e21f0c9317e16885a0909a8ca0c4))
+* **did:** block SSRF via did:web to private/loopback/IMDS addresses ([72c7a4d](https://github.com/kikin81/atproto-push-gateway/commit/72c7a4dc4fcb10ca35cfc9a48cc865d0cca78d0d))
+* **did:** cap DID document cache size ([e37f924](https://github.com/kikin81/atproto-push-gateway/commit/e37f9249b544f5ab06579a4762dda1368845a3ee))
+* **did:** cap DNS lookup at 5 seconds ([f6a53ef](https://github.com/kikin81/atproto-push-gateway/commit/f6a53ef7c3147f7303b4b629a4cc107318ea96ab))
+* **did:** require exact length for multibase-encoded keys ([a696715](https://github.com/kikin81/atproto-push-gateway/commit/a696715f3b8bc7c5a555b2114bc4e3432d64668d))
+* **jetstream:** add websocket ping/pong and read timeouts ([1e6d2ec](https://github.com/kikin81/atproto-push-gateway/commit/1e6d2ec4f30cd0ee81dadb2b179a5d95fec83893))
+* **jetstream:** cap decompressed zstd frame size ([19fe6f4](https://github.com/kikin81/atproto-push-gateway/commit/19fe6f46df5088ef6ed066bb19c65b8044694d49))
+* **jetstream:** move push dispatch to bounded worker pool ([1563a59](https://github.com/kikin81/atproto-push-gateway/commit/1563a5987ef2eeaba2faa9d22184dc376ac7e463))
+* **originverify:** always exempt the /relay/ path tree ([50816d0](https://github.com/kikin81/atproto-push-gateway/commit/50816d0912fbe02abb6c620669194e3ee8ebbe10))
+* **push:** add 10s HTTP timeout to Expo and FCM senders ([eb57563](https://github.com/kikin81/atproto-push-gateway/commit/eb57563c65e76bc95a5c79cc443f597fc5f323ea))
+* **push:** redact push tokens in logs unless debug logging is enabled ([f603c48](https://github.com/kikin81/atproto-push-gateway/commit/f603c48ef136867c894f6877f06b8be3f18f9d4a))
+* **push:** remove stale tokens on APNs 410 / FCM UNREGISTERED ([8cc6f75](https://github.com/kikin81/atproto-push-gateway/commit/8cc6f75df01c5826f261bc5fc76c907d50e8c5a6))
+* **server:** add HTTP timeouts and header size cap ([9a97ebf](https://github.com/kikin81/atproto-push-gateway/commit/9a97ebfb8ec0d9cd94ddd5df49fe6feba5cca782))
+* **server:** guardrail DEV_MODE against accidental production use ([d865416](https://github.com/kikin81/atproto-push-gateway/commit/d86541676da84c02b11683a998ea5529c45dc86e))
+* **server:** validate PUSH_GATEWAY_DID is a did:web at startup ([5163ec5](https://github.com/kikin81/atproto-push-gateway/commit/5163ec5ac4e01ab32b6d59218d195ea9df335854))
+* **store:** wrap per-DID token cap check in a transaction ([da0864f](https://github.com/kikin81/atproto-push-gateway/commit/da0864fd5067d03b7a65725f4fe3ae27197f919e))
+* **xrpc:** add lxm validation ([c1839d4](https://github.com/kikin81/atproto-push-gateway/commit/c1839d402aadeec36c29ad474da9f64f3ac0686e))
+* **xrpc:** add lxm validation ([8d1bf5c](https://github.com/kikin81/atproto-push-gateway/commit/8d1bf5c6606870df208554e5aafd36fda36c2ec4))
+* **xrpc:** cap JWT exp at 5 minutes in the future ([5e77b2d](https://github.com/kikin81/atproto-push-gateway/commit/5e77b2de25033e0b360cdc41d7dbefe93edabf04))
+* **xrpc:** reject JWTs on any verification failure ([8b9190a](https://github.com/kikin81/atproto-push-gateway/commit/8b9190a47cceba253e709555242e7adcd5d1ac57))
+* **xrpc:** require CF-Connecting-IP header on XRPC endpoints ([#1](https://github.com/kikin81/atproto-push-gateway/issues/1)) ([48fc3e2](https://github.com/kikin81/atproto-push-gateway/commit/48fc3e2e2c36919e9bf4d7ea7b3397da7fa8d17a))
+* **xrpc:** require CF-Connecting-IP header on XRPC endpoints ([#1](https://github.com/kikin81/atproto-push-gateway/issues/1)) ([23ef700](https://github.com/kikin81/atproto-push-gateway/commit/23ef700c185de09d64b7bc7ba5a431bd13526c13))
+* **xrpc:** require request body serviceDid to match configured DID ([6da5138](https://github.com/kikin81/atproto-push-gateway/commit/6da513815eb9f543e5e130c60b5615843e7c9c06))
+* **xrpc:** return {} on registerPush/unregisterPush success ([#2](https://github.com/kikin81/atproto-push-gateway/issues/2)) ([dcfaf6a](https://github.com/kikin81/atproto-push-gateway/commit/dcfaf6a661ef6bf6138a220bc62f03eac88abf1c))
+* **xrpc:** return {} on registerPush/unregisterPush success ([#2](https://github.com/kikin81/atproto-push-gateway/issues/2)) ([72d447a](https://github.com/kikin81/atproto-push-gateway/commit/72d447a5c6d13f1e48ec41165e9fb7562af7b0c0))
+* **xrpc:** validate JWT aud claim against configured service DID ([c2e777b](https://github.com/kikin81/atproto-push-gateway/commit/c2e777bede79291583316edda9548fa7deb2f3cb))
+* **xrpc:** verify JWT before parsing request body ([63f7ebb](https://github.com/kikin81/atproto-push-gateway/commit/63f7ebb01f192b617cae68e72b6bf4416de1fffe))
+
 ## [1.6.0](https://github.com/DracoBlue/atproto-push-gateway/compare/v1.5.0...v1.6.0) (2026-10-09)
 
 
