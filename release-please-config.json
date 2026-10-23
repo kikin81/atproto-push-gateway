@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "last-release-sha": "100fd29f03348bf69491b32f461b2738bae3113d",
+  "include-component-in-tag": true,
+  "packages": {
+    ".": {
+      "release-type": "go",
+      "component": "nubecita",
+      "skip-changelog": true
+    }
+  }
+}
