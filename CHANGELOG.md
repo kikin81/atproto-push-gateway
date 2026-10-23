@@ -1,17 +1,50 @@
 # Changelog
 
-## [1.3.0](https://github.com/kikin81/atproto-push-gateway/compare/v1.2.0...v1.3.0) (2026-06-08)
+## [1.6.0](https://github.com/DracoBlue/atproto-push-gateway/compare/v1.5.0...v1.6.0) (2026-10-09)
 
 
 ### Features
 
-* **jetstream:** post text in reply/mention/quote notification bodies ([#3](https://github.com/kikin81/atproto-push-gateway/issues/3)) ([8156c6a](https://github.com/kikin81/atproto-push-gateway/commit/8156c6a41401c3ad1f81c7a3788a04e819a3d70c))
+* **push:** allow per-notification data-only delivery ([9692d15](https://github.com/DracoBlue/atproto-push-gateway/commit/9692d154058f06626dc8ca8011be9f21bad72572))
+* **relay:** add Fediverse Web Push relay ([7e40027](https://github.com/DracoBlue/atproto-push-gateway/commit/7e4002723fcd8e5f11d586b3383599094a039d14))
+* **relay:** report the wire format of incoming pushes ([9c71008](https://github.com/DracoBlue/atproto-push-gateway/commit/9c710088a3dc29164d549558117c2bfb84f2567d))
+* **store:** add webpush_endpoints for relay endpoint mappings ([6959296](https://github.com/DracoBlue/atproto-push-gateway/commit/6959296a1fccdcc5f3ead57a95721899f95cd26d))
+* **vapid:** verify RFC 8292 Authorization headers against a pinned key ([da3ba98](https://github.com/DracoBlue/atproto-push-gateway/commit/da3ba988240c502e03a368da0f7febec568eddd4))
 
 
 ### Bug Fixes
 
-* **xrpc:** require CF-Connecting-IP header on XRPC endpoints ([#1](https://github.com/kikin81/atproto-push-gateway/issues/1)) ([23ef700](https://github.com/kikin81/atproto-push-gateway/commit/23ef700c185de09d64b7bc7ba5a431bd13526c13))
-* **xrpc:** return {} on registerPush/unregisterPush success ([#2](https://github.com/kikin81/atproto-push-gateway/issues/2)) ([72d447a](https://github.com/kikin81/atproto-push-gateway/commit/72d447a5c6d13f1e48ec41165e9fb7562af7b0c0))
+* **originverify:** always exempt the /relay/ path tree ([50816d0](https://github.com/DracoBlue/atproto-push-gateway/commit/50816d0912fbe02abb6c620669194e3ee8ebbe10))
+
+## [1.5.0](https://github.com/DracoBlue/atproto-push-gateway/compare/v1.4.0...v1.5.0) (2026-06-13)
+
+
+### Features
+
+* **push:** add FCM_DATA_ONLY for client-side Android localization ([4c27556](https://github.com/DracoBlue/atproto-push-gateway/commit/4c275565bcfa86c29743a6603e518cd80ed2f3db))
+
+## [1.4.0](https://github.com/DracoBlue/atproto-push-gateway/compare/v1.3.0...v1.4.0) (2026-06-13)
+
+
+### Features
+
+* include actor post text in reply/quote/mention notifications ([932ab62](https://github.com/DracoBlue/atproto-push-gateway/commit/932ab622273472267939b13c456d40ec7f36f002))
+* lazy-fetch subject post text for like/repost notifications ([8e6502d](https://github.com/DracoBlue/atproto-push-gateway/commit/8e6502d0921cb2e33a9356d981d54b069d82f843))
+* origin-verify shared-secret middleware for CDN / WAF setups ([855246e](https://github.com/DracoBlue/atproto-push-gateway/commit/855246e8dacfb5c4957c08a2863c5483756d9c4b))
+
+## [1.3.0](https://github.com/DracoBlue/atproto-push-gateway/compare/v1.2.0...v1.3.0) (2026-06-12)
+
+
+### Features
+
+* **server:** add LOG_LEVEL and cache/decompression size env vars ([fda93ff](https://github.com/DracoBlue/atproto-push-gateway/commit/fda93ffecbb003cc69f353ed5ccf17f87f48283a))
+
+
+### Bug Fixes
+
+* **did:** cap DID document cache size ([e37f924](https://github.com/DracoBlue/atproto-push-gateway/commit/e37f9249b544f5ab06579a4762dda1368845a3ee))
+* **jetstream:** cap decompressed zstd frame size ([19fe6f4](https://github.com/DracoBlue/atproto-push-gateway/commit/19fe6f46df5088ef6ed066bb19c65b8044694d49))
+* **push:** redact push tokens in logs unless debug logging is enabled ([f603c48](https://github.com/DracoBlue/atproto-push-gateway/commit/f603c48ef136867c894f6877f06b8be3f18f9d4a))
 
 ## [1.2.0](https://github.com/DracoBlue/atproto-push-gateway/compare/v1.1.0...v1.2.0) (2026-04-23)
 

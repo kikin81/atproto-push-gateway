@@ -3,7 +3,6 @@ package store
 import (
 	"database/sql"
 	"fmt"
-	"log"
 	"sync"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -23,8 +22,8 @@ type Block struct {
 }
 
 type Store struct {
-	db         *sql.DB
-	mu         sync.RWMutex
+	db                  *sql.DB
+	mu                  sync.RWMutex
 	registeredDIDs      map[string]bool
 	blocks              map[string]map[string]bool   // blocker -> blocked -> true
 	blocksByRKey        map[string]map[string]string // blocker -> rkey -> blocked
@@ -64,6 +63,18 @@ func New(dbPath string) (*Store, error) {
 			actor_did TEXT PRIMARY KEY,
 			backfilled_at TEXT DEFAULT (datetime('now'))
 		);
+		CREATE TABLE IF NOT EXISTS webpush_endpoints (
+			endpoint_hash TEXT PRIMARY KEY,
+			platform TEXT NOT NULL CHECK (platform IN ('ios', 'android')),
+			device_token TEXT NOT NULL,
+			app_id TEXT NOT NULL,
+			vapid_public_key TEXT NOT NULL DEFAULT '',
+			instance TEXT NOT NULL DEFAULT '',
+			created_at TEXT DEFAULT (datetime('now')),
+			last_push_at TEXT
+		);
+		CREATE INDEX IF NOT EXISTS idx_webpush_device
+			ON webpush_endpoints (device_token, app_id);
 	`); err != nil {
 		return nil, err
 	}
@@ -156,7 +167,7 @@ func (s *Store) RegisterToken(actorDID, platform, pushToken, appID string) error
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer tx.Rollback()
 
 	var existing int
 	if err := tx.QueryRow(
@@ -197,14 +208,9 @@ func (s *Store) UnregisterToken(actorDID, platform, pushToken, appID string) err
 		return err
 	}
 
-	// Check if DID still has any tokens. On a scan error we leave the
-	// registeredDIDs entry intact rather than pruning it on false-zero, so a
-	// transient DB hiccup can't drop a still-registered DID from the fast path.
+	// Check if DID still has any tokens
 	var count int
-	if err := s.db.QueryRow("SELECT COUNT(*) FROM push_tokens WHERE actor_did = ?", actorDID).Scan(&count); err != nil {
-		log.Printf("[store] count tokens for %s: %v", actorDID, err)
-		return nil
-	}
+	s.db.QueryRow("SELECT COUNT(*) FROM push_tokens WHERE actor_did = ?", actorDID).Scan(&count)
 	if count == 0 {
 		s.mu.Lock()
 		delete(s.registeredDIDs, actorDID)
@@ -350,12 +356,8 @@ func (s *Store) IsBlocked(actorDID, targetDID string) bool {
 }
 
 func (s *Store) GetStats() (tokenCount int, blockCount int, didCount int) {
-	if err := s.db.QueryRow("SELECT COUNT(*) FROM push_tokens").Scan(&tokenCount); err != nil {
-		log.Printf("[store] stats: count tokens: %v", err)
-	}
-	if err := s.db.QueryRow("SELECT COUNT(*) FROM blocks").Scan(&blockCount); err != nil {
-		log.Printf("[store] stats: count blocks: %v", err)
-	}
+	s.db.QueryRow("SELECT COUNT(*) FROM push_tokens").Scan(&tokenCount)
+	s.db.QueryRow("SELECT COUNT(*) FROM blocks").Scan(&blockCount)
 	s.mu.RLock()
 	didCount = len(s.registeredDIDs)
 	s.mu.RUnlock()

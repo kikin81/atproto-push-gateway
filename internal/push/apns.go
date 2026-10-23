@@ -24,6 +24,7 @@ type APNsSender struct {
 	client  *http.Client
 	topic   string // Bundle ID
 	sandbox bool   // Use sandbox endpoint (for dev/preview builds)
+	baseURL string // overridable in tests; defaults to the APNs production or sandbox host
 
 	mu       sync.Mutex
 	token    string
@@ -60,12 +61,18 @@ func newAPNsSenderFromBytes(keyData []byte, keyID, teamID, topic string, sandbox
 		return nil, fmt.Errorf("APNs key is not an ECDSA key")
 	}
 
+	baseURL := "https://api.push.apple.com"
+	if sandbox {
+		baseURL = "https://api.sandbox.push.apple.com"
+	}
+
 	return &APNsSender{
 		keyID:   keyID,
 		teamID:  teamID,
 		key:     ecKey,
 		topic:   topic,
 		sandbox: sandbox,
+		baseURL: baseURL,
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -104,7 +111,7 @@ func (a *APNsSender) getToken() (string, error) {
 
 type apnsPayload struct {
 	APS  apnsAPS           `json:"aps"`
-	Data map[string]string  `json:"data,omitempty"`
+	Data map[string]string `json:"data,omitempty"`
 }
 
 type apnsAPS struct {
@@ -141,11 +148,7 @@ func (a *APNsSender) Send(n Notification) error {
 		return err
 	}
 
-	host := "api.push.apple.com"
-	if a.sandbox {
-		host = "api.sandbox.push.apple.com"
-	}
-	url := fmt.Sprintf("https://%s/3/device/%s", host, n.Token)
+	url := fmt.Sprintf("%s/3/device/%s", a.baseURL, n.Token)
 	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -167,7 +170,7 @@ func (a *APNsSender) Send(n Notification) error {
 		var errResp struct {
 			Reason string `json:"reason"`
 		}
-		_ = json.NewDecoder(resp.Body).Decode(&errResp)
+		json.NewDecoder(resp.Body).Decode(&errResp)
 		// 410 Gone or reason=Unregistered → device token is permanently invalid.
 		if resp.StatusCode == 410 || errResp.Reason == "Unregistered" || errResp.Reason == "BadDeviceToken" {
 			return fmt.Errorf("%w: APNs %d %s", ErrTokenInvalid, resp.StatusCode, errResp.Reason)
@@ -175,6 +178,6 @@ func (a *APNsSender) Send(n Notification) error {
 		return fmt.Errorf("APNs returned %d: %s", resp.StatusCode, errResp.Reason)
 	}
 
-	log.Printf("[push/apns] sent to %s: %s", truncateToken(n.Token, 20), n.Data["reason"])
+	log.Printf("[push/apns] sent to %s: %s", tokenForLog(n.Token), n.Data["reason"])
 	return nil
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/klauspost/compress/zstd"
 
+	"github.com/dracoblue/atproto-push-gateway/internal/posttext"
 	"github.com/dracoblue/atproto-push-gateway/internal/profile"
 	"github.com/dracoblue/atproto-push-gateway/internal/push"
 	"github.com/dracoblue/atproto-push-gateway/internal/store"
@@ -27,13 +28,17 @@ const (
 	wsWriteTimeout    = 10 * time.Second
 	wsPingInterval    = 20 * time.Second
 	wsMaxMessageBytes = 1 << 20 // 1 MiB per frame
+
+	// defaultMaxDecompressedBytes caps the decompressed size of a single
+	// zstd frame so a decompression bomb cannot exhaust memory.
+	defaultMaxDecompressedBytes = 8 << 20 // 8 MiB
 )
 
 type Event struct {
-	DID        string          `json:"did"`
-	TimeUS     int64           `json:"time_us"`
-	Kind       string          `json:"kind"`
-	Commit     *CommitEvent    `json:"commit,omitempty"`
+	DID    string       `json:"did"`
+	TimeUS int64        `json:"time_us"`
+	Kind   string       `json:"kind"`
+	Commit *CommitEvent `json:"commit,omitempty"`
 }
 
 type CommitEvent struct {
@@ -103,15 +108,18 @@ type dispatchItem struct {
 }
 
 type Consumer struct {
-	url             string
-	store           *store.Store
-	sender          *push.MultiSender
-	profileResolver *profile.Resolver
-	lastCursor      atomic.Int64
-	stopCh          chan struct{}
-	startCh         chan struct{} // closed when first token registered
-	commitCh        chan dispatchItem
-	eventsDropped   atomic.Int64
+	url                  string
+	store                *store.Store
+	sender               push.Sender
+	profileResolver      *profile.Resolver
+	postTextResolver     *posttext.Resolver
+	maxDecompressedBytes uint64
+	postTextMaxGraphemes int
+	lastCursor           atomic.Int64
+	stopCh               chan struct{}
+	startCh              chan struct{} // closed when first token registered
+	commitCh             chan dispatchItem
+	eventsDropped        atomic.Int64
 
 	// Stats
 	eventsReceived atomic.Int64
@@ -143,15 +151,17 @@ func (c *Consumer) GetStats() Stats {
 	}
 }
 
-func NewConsumer(url string, s *store.Store, sender *push.MultiSender, profileResolver *profile.Resolver) *Consumer {
+func NewConsumer(url string, s *store.Store, sender push.Sender, profileResolver *profile.Resolver) *Consumer {
 	c := &Consumer{
-		url:             url,
-		store:           s,
-		sender:          sender,
-		profileResolver: profileResolver,
-		stopCh:          make(chan struct{}),
-		startCh:         make(chan struct{}),
-		commitCh:        make(chan dispatchItem, 1024),
+		url:                  url,
+		store:                s,
+		sender:               sender,
+		profileResolver:      profileResolver,
+		maxDecompressedBytes: defaultMaxDecompressedBytes,
+		postTextMaxGraphemes: defaultPostTextMaxGraphemes,
+		stopCh:               make(chan struct{}),
+		startCh:              make(chan struct{}),
+		commitCh:             make(chan dispatchItem, 1024),
 	}
 	// If tokens already exist (from SQLite on restart), start immediately
 	if s.HasRegisteredDIDs() {
@@ -163,6 +173,40 @@ func NewConsumer(url string, s *store.Store, sender *push.MultiSender, profileRe
 // Stop signals the consumer to stop reconnecting.
 func (c *Consumer) Stop() {
 	close(c.stopCh)
+}
+
+// SetMaxDecompressedBytes overrides the per-frame decompression cap.
+// Must be called before Run(). Values <= 0 keep the default.
+func (c *Consumer) SetMaxDecompressedBytes(n int64) {
+	if n > 0 {
+		c.maxDecompressedBytes = uint64(n)
+	}
+}
+
+// SetPostTextResolver enables lazy fetching of the subject post's text for
+// like / repost / like-via-repost / repost-via-repost notifications.
+// Fetching happens only after all delivery gates pass (registered, not
+// blocked, tokens present). Pass nil (the default) to disable.
+func (c *Consumer) SetPostTextResolver(r *posttext.Resolver) {
+	c.postTextResolver = r
+}
+
+// SetPostTextMaxGraphemes overrides the max length of the post text
+// included as `reasonSubject` for reply/quote/mention notifications.
+// Values <= 0 keep the default (300, matching Bluesky's MAX_GRAPHEMES).
+func (c *Consumer) SetPostTextMaxGraphemes(n int) {
+	if n > 0 {
+		c.postTextMaxGraphemes = n
+	}
+}
+
+// newZstdDecoder creates a zstd decoder with the Jetstream dictionary and the
+// configured decompressed-size cap.
+func (c *Consumer) newZstdDecoder() (*zstd.Decoder, error) {
+	return zstd.NewReader(nil,
+		zstd.WithDecoderDicts(zstdDictionary),
+		zstd.WithDecoderMaxMemory(c.maxDecompressedBytes),
+	)
 }
 
 // NotifyTokenRegistered signals that a token was registered.
@@ -277,7 +321,7 @@ func (c *Consumer) connect(url string) error {
 	defer conn.Close()
 
 	conn.SetReadLimit(wsMaxMessageBytes)
-	_ = conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
+	conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
 	conn.SetPongHandler(func(string) error {
 		return conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
 	})
@@ -316,7 +360,7 @@ func (c *Consumer) connect(url string) error {
 	}()
 
 	// Create zstd decoder with Jetstream dictionary for compressed messages
-	decoder, err := zstd.NewReader(nil, zstd.WithDecoderDicts(zstdDictionary))
+	decoder, err := c.newZstdDecoder()
 	if err != nil {
 		log.Printf("[jetstream] failed to create zstd decoder: %v", err)
 		return err
@@ -394,17 +438,15 @@ func (c *Consumer) handleCommit(actorDID string, commit *CommitEvent) {
 			c.handleFollow(actorDID, commit.RKey, commit.Record)
 		}
 	case "app.bsky.graph.block":
-		switch commit.Operation {
-		case "create":
+		if commit.Operation == "create" {
 			c.handleBlockCreate(actorDID, commit.RKey, commit.Record)
-		case "delete":
+		} else if commit.Operation == "delete" {
 			c.handleBlockDelete(actorDID, commit.RKey)
 		}
 	case "app.bsky.graph.verification":
-		switch commit.Operation {
-		case "create":
+		if commit.Operation == "create" {
 			c.handleVerificationCreate(actorDID, commit.RKey, commit.Record)
-		case "delete":
+		} else if commit.Operation == "delete" {
 			c.handleVerificationDelete(actorDID, commit.RKey)
 		}
 	}
@@ -434,13 +476,13 @@ func (c *Consumer) handleLike(actorDID string, rkey string, record json.RawMessa
 	}
 
 	recordURI := fmt.Sprintf("at://%s/app.bsky.feed.like/%s", actorDID, rkey)
-	c.sendNotification(actorDID, targetDID, "like", recordURI, like.Subject.URI)
+	c.sendNotification(actorDID, targetDID, "like", recordURI, like.Subject.URI, "")
 
 	// like-via-repost: notify the reposter if discovered via their repost
 	if like.Via != nil {
 		reposterDID := extractDIDFromURI(like.Via.URI)
 		if reposterDID != "" && reposterDID != actorDID && reposterDID != targetDID {
-			c.sendNotification(actorDID, reposterDID, "like-via-repost", recordURI, like.Subject.URI)
+			c.sendNotification(actorDID, reposterDID, "like-via-repost", recordURI, like.Subject.URI, "")
 		}
 	}
 }
@@ -457,13 +499,13 @@ func (c *Consumer) handleRepost(actorDID string, rkey string, record json.RawMes
 	}
 
 	recordURI := fmt.Sprintf("at://%s/app.bsky.feed.repost/%s", actorDID, rkey)
-	c.sendNotification(actorDID, targetDID, "repost", recordURI, repost.Subject.URI)
+	c.sendNotification(actorDID, targetDID, "repost", recordURI, repost.Subject.URI, "")
 
 	// repost-via-repost: notify the original reposter if discovered via their repost
 	if repost.Via != nil {
 		reposterDID := extractDIDFromURI(repost.Via.URI)
 		if reposterDID != "" && reposterDID != actorDID && reposterDID != targetDID {
-			c.sendNotification(actorDID, reposterDID, "repost-via-repost", recordURI, repost.Subject.URI)
+			c.sendNotification(actorDID, reposterDID, "repost-via-repost", recordURI, repost.Subject.URI, "")
 		}
 	}
 }
@@ -475,16 +517,13 @@ func (c *Consumer) handlePost(actorDID string, rkey string, record json.RawMessa
 	}
 
 	postURI := fmt.Sprintf("at://%s/app.bsky.feed.post/%s", actorDID, rkey)
-
-	// Reply, quote, and mention notifications carry the notifying post's own
-	// text as the body (post.Text is already decoded from the firehose event —
-	// no extra fetch). notificationContent trims/truncates it.
+	postText := truncatePostText(sanitizePostText(post.Text), c.postTextMaxGraphemes)
 
 	// Reply
 	if post.Reply != nil {
 		targetDID := extractDIDFromURI(post.Reply.Parent.URI)
 		if targetDID != "" && targetDID != actorDID {
-			c.sendNotificationWithText(actorDID, targetDID, "reply", postURI, post.Reply.Parent.URI, post.Text)
+			c.sendNotification(actorDID, targetDID, "reply", postURI, post.Reply.Parent.URI, postText)
 		}
 	}
 
@@ -492,7 +531,7 @@ func (c *Consumer) handlePost(actorDID string, rkey string, record json.RawMessa
 	if post.Embed != nil && post.Embed.Type == "app.bsky.embed.record" && post.Embed.Record != nil {
 		targetDID := extractDIDFromURI(post.Embed.Record.URI)
 		if targetDID != "" && targetDID != actorDID {
-			c.sendNotificationWithText(actorDID, targetDID, "quote", postURI, post.Embed.Record.URI, post.Text)
+			c.sendNotification(actorDID, targetDID, "quote", postURI, post.Embed.Record.URI, postText)
 		}
 	}
 
@@ -500,7 +539,7 @@ func (c *Consumer) handlePost(actorDID string, rkey string, record json.RawMessa
 	for _, facet := range post.Facets {
 		for _, feature := range facet.Features {
 			if feature.Type == "app.bsky.richtext.facet#mention" && feature.DID != "" && feature.DID != actorDID {
-				c.sendNotificationWithText(actorDID, feature.DID, "mention", postURI, "", post.Text)
+				c.sendNotification(actorDID, feature.DID, "mention", postURI, "", postText)
 			}
 		}
 	}
@@ -517,7 +556,7 @@ func (c *Consumer) handleFollow(actorDID string, rkey string, record json.RawMes
 	}
 
 	recordURI := fmt.Sprintf("at://%s/app.bsky.graph.follow/%s", actorDID, rkey)
-	c.sendNotification(actorDID, follow.Subject, "follow", recordURI, "")
+	c.sendNotification(actorDID, follow.Subject, "follow", recordURI, "", "")
 }
 
 func (c *Consumer) handleBlockCreate(actorDID string, rkey string, record json.RawMessage) {
@@ -532,10 +571,7 @@ func (c *Consumer) handleBlockCreate(actorDID string, rkey string, record json.R
 
 	// Only track blocks for registered DIDs
 	if c.store.IsRegistered(actorDID) || c.store.IsRegistered(block.Subject) {
-		if err := c.store.AddBlock(actorDID, block.Subject, rkey); err != nil {
-			log.Printf("[jetstream] error adding block: %v", err)
-			return
-		}
+		c.store.AddBlock(actorDID, block.Subject, rkey)
 		log.Printf("[jetstream] block: %s blocked %s (rkey=%s)", actorDID, block.Subject, rkey)
 	}
 }
@@ -566,10 +602,7 @@ func (c *Consumer) handleVerificationCreate(verifierDID string, rkey string, rec
 	}
 
 	// Store for later deletion lookup
-	if err := c.store.AddVerification(verifierDID, verification.Subject, rkey); err != nil {
-		log.Printf("[jetstream] error adding verification: %v", err)
-		return
-	}
+	c.store.AddVerification(verifierDID, verification.Subject, rkey)
 
 	// Only notify registered DIDs
 	if !c.store.IsRegistered(verification.Subject) {
@@ -577,7 +610,7 @@ func (c *Consumer) handleVerificationCreate(verifierDID string, rkey string, rec
 	}
 
 	recordURI := fmt.Sprintf("at://%s/app.bsky.graph.verification/%s", verifierDID, rkey)
-	c.sendNotification(verifierDID, verification.Subject, "verified", recordURI, "")
+	c.sendNotification(verifierDID, verification.Subject, "verified", recordURI, "", "")
 	log.Printf("[jetstream] verified: %s verified %s (rkey=%s)", verifierDID, verification.Subject, rkey)
 }
 
@@ -601,7 +634,7 @@ func (c *Consumer) handleVerificationDelete(verifierDID string, rkey string) {
 	}
 
 	recordURI := fmt.Sprintf("at://%s/app.bsky.graph.verification/%s", verifierDID, rkey)
-	c.sendNotification(verifierDID, subjectDID, "unverified", recordURI, "")
+	c.sendNotification(verifierDID, subjectDID, "unverified", recordURI, "", "")
 	log.Printf("[jetstream] unverified: %s unverified %s (rkey=%s)", verifierDID, subjectDID, rkey)
 }
 
@@ -635,7 +668,42 @@ var reasonBodyTemplates = map[string]string{
 	"unverified":        "Your account verification was removed",
 }
 
-func formatNotification(reason, actorDisplayName, actorHandle string) (string, string) {
+// reasonBodyTemplatesWithText is used when we have the actor's post text
+// (reply/quote/mention). The first %s is the actor name, the second %s
+// is the sanitized + truncated post body.
+var reasonBodyTemplatesWithText = map[string]string{
+	"reply":             "%s replied: %s",
+	"quote":             "%s quoted your post: %s",
+	"mention":           "%s mentioned you: %s",
+	"like":              "%s liked your post: %s",
+	"repost":            "%s reposted your post: %s",
+	"like-via-repost":   "%s liked a post you reposted: %s",
+	"repost-via-repost": "%s reposted a post you reposted: %s",
+}
+
+// reasonFetchesSubjectText reports whether a reason warrants a lazy
+// getPosts lookup for the subject post text. Reply/quote/mention already
+// carry text in the Jetstream commit, so they aren't listed here.
+func reasonFetchesSubjectText(reason string) bool {
+	switch reason {
+	case "like", "repost", "like-via-repost", "repost-via-repost":
+		return true
+	}
+	return false
+}
+
+// carriesActorPostText reports whether postText for this reason is the
+// notifying actor's own post (taken from the Jetstream commit) rather than a
+// lazily fetched subject post. Only these reasons populate bodyText.
+func carriesActorPostText(reason string) bool {
+	switch reason {
+	case "reply", "quote", "mention":
+		return true
+	}
+	return false
+}
+
+func formatNotification(reason, actorDisplayName, actorHandle, postText string) (string, string) {
 	title := reasonTitles[reason]
 	if title == "" {
 		title = "Notification"
@@ -647,6 +715,12 @@ func formatNotification(reason, actorDisplayName, actorHandle string) (string, s
 	}
 	if actorName == "" {
 		actorName = "Someone"
+	}
+
+	if postText != "" {
+		if tmpl, ok := reasonBodyTemplatesWithText[reason]; ok {
+			return title, fmt.Sprintf(tmpl, actorName, postText)
+		}
 	}
 
 	template := reasonBodyTemplates[reason]
@@ -661,46 +735,7 @@ func formatNotification(reason, actorDisplayName, actorHandle string) (string, s
 	return title, fmt.Sprintf(template, actorName)
 }
 
-// maxBodyRunes bounds the post text we put in a notification body so the FCM
-// payload stays well under its 4 KB limit and the shade stays tidy.
-const maxBodyRunes = 200
-
-// truncateBody trims and rune-safely truncates post text for a notification
-// body. Cuts on a UTF-8 rune boundary (never mid-codepoint); appends an
-// ellipsis when shortened. Returns "" for blank input.
-func truncateBody(s string) string {
-	s = strings.TrimSpace(s)
-	r := []rune(s)
-	if len(r) <= maxBodyRunes {
-		return s
-	}
-	return string(r[:maxBodyRunes]) + "…"
-}
-
-// notificationContent builds the title, body, and (optional) data bodyText for a
-// notification. When postText is non-blank (reply/mention/quote), it renders
-// Bluesky-style: the actor+reason line becomes the TITLE and the post text the
-// BODY, and the same truncated text is returned as the data bodyText field.
-// When postText is blank (like/repost/follow, or empty post), it falls back to
-// the existing title/body and no bodyText.
-func notificationContent(reason, actorDisplayName, actorHandle, postText string) (title, body, dataBodyText string) {
-	title, body = formatNotification(reason, actorDisplayName, actorHandle)
-	text := truncateBody(postText)
-	if text == "" {
-		return title, body, ""
-	}
-	// Promote the reason line to the title; the post text is the body.
-	return body, text, text
-}
-
-// sendNotification is the body-less entry point used by like/repost/follow/
-// verification handlers. handlePost uses sendNotificationWithText to carry the
-// notifying post's text.
-func (c *Consumer) sendNotification(actorDID, targetDID, reason, recordURI, subjectURI string) {
-	c.sendNotificationWithText(actorDID, targetDID, reason, recordURI, subjectURI, "")
-}
-
-func (c *Consumer) sendNotificationWithText(actorDID, targetDID, reason, recordURI, subjectURI, postText string) {
+func (c *Consumer) sendNotification(actorDID, targetDID, reason, recordURI, subjectURI, postText string) {
 	if !c.store.IsRegistered(targetDID) {
 		return
 	}
@@ -725,7 +760,15 @@ func (c *Consumer) sendNotificationWithText(actorDID, targetDID, reason, recordU
 		actorDisplayName, actorHandle = c.profileResolver.ResolveProfile(actorDID)
 	}
 
-	title, body, dataBodyText := notificationContent(reason, actorDisplayName, actorHandle, postText)
+	// Lazy-fetch the subject post text for reasons where the post is in
+	// another user's repo (like/repost variants). Only after all delivery
+	// gates pass — we never fetch for a notification we wouldn't send.
+	if postText == "" && subjectURI != "" && c.postTextResolver != nil && reasonFetchesSubjectText(reason) {
+		raw := c.postTextResolver.ResolveText(subjectURI)
+		postText = truncatePostText(sanitizePostText(raw), c.postTextMaxGraphemes)
+	}
+
+	title, body := formatNotification(reason, actorDisplayName, actorHandle, postText)
 
 	for _, token := range tokens {
 		n := push.Notification{
@@ -745,8 +788,16 @@ func (c *Consumer) sendNotificationWithText(actorDID, targetDID, reason, recordU
 		if subjectURI != "" {
 			n.Data["subject"] = subjectURI
 		}
-		if dataBodyText != "" {
-			n.Data["bodyText"] = dataBodyText
+		if postText != "" {
+			n.Data["reasonSubject"] = postText
+		}
+		// Nubecita client contract (PushPayload.bodyText): the notifying
+		// post's own text, for reply/quote/mention only. Carried alongside
+		// upstream's reasonSubject (which also holds the subject post's text
+		// for like/repost) so clients built against the fork keep rendering
+		// the expanded notification body.
+		if postText != "" && carriesActorPostText(reason) {
+			n.Data["bodyText"] = postText
 		}
 
 		if err := c.sender.Send(n); err != nil {

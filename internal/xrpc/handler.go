@@ -70,6 +70,12 @@ func NewHandlerWithoutStats(s *store.Store, devMode bool, serviceDID string) *Ha
 	return &Handler{store: s, devMode: devMode, serviceDID: serviceDID, didResolver: did.NewResolver(), onTokenRegistered: nil}
 }
 
+// SetDIDResolver replaces the default DID resolver, e.g. to configure a
+// custom cache size. Must be called before the handler serves requests.
+func (h *Handler) SetDIDResolver(r DIDResolver) {
+	h.didResolver = r
+}
+
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, serviceDID string) {
 	mux.HandleFunc("POST /xrpc/"+lexiconRegisterPush, h.handleRegisterPush)
 	mux.HandleFunc("POST /xrpc/"+lexiconUnregisterPush, h.handleUnregisterPush)
@@ -84,7 +90,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, serviceDID string) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]interface{}{
 			"@context": []string{"https://www.w3.org/ns/did/v1"},
 			"id":       serviceDID,
 			"service": []map[string]string{
@@ -109,11 +115,14 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, serviceDID string) {
 			"registeredDIDs": dids,
 			"totalTokens":    tokens,
 			"trackedBlocks":  blocks,
+			// Fediverse web push relay endpoints, unrelated to the ATproto
+			// token count above.
+			"relayEndpoints": h.store.CountWebPushEndpoints(),
 		}
 		if h.statsProvider != nil {
 			result["jetstream"] = h.statsProvider()
 		}
-		_ = json.NewEncoder(w).Encode(result)
+		json.NewEncoder(w).Encode(result)
 	})
 
 	// Test endpoint (dev mode only)
@@ -439,7 +448,7 @@ func (h *Handler) handleTestRegister(w http.ResponseWriter, r *http.Request) {
 		h.onTokenRegistered()
 	}
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "registered"})
+	json.NewEncoder(w).Encode(map[string]string{"status": "registered"})
 }
 
 // Dev mode: trigger a test push
@@ -458,7 +467,7 @@ func (h *Handler) handleTestPush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status": "found",
 		"tokens": len(tokens),
 	})

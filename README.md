@@ -2,6 +2,11 @@
 
 A self-hosted push notification gateway for [AT Protocol](https://atproto.com/) apps. Receives `registerPush` calls from any PDS and delivers native push notifications (FCM/APNs/Expo) when social events occur.
 
+It also ships a second, independent feature: a **Fediverse Web Push relay**
+that forwards encrypted Web Push deliveries from Mastodon-compatible servers
+to APNs/FCM, so one deployment can serve both protocols. See
+[docs/WEBPUSH_RELAY.md](docs/WEBPUSH_RELAY.md).
+
 ## Why?
 
 Bluesky's push infrastructure (`push.bsky.app`) is closed source and does not send push notifications to third-party apps. If you build your own ATproto client, you need your own push gateway. This project fills that gap.
@@ -13,11 +18,11 @@ Your App                        PDS (user's)              push.example.org
     │                               │                            │
     │─── registerPush ─────────---─>│                            │
     │    serviceDid:                │─── XRPC forward ──────────>│
-    │    did:web:push.example.org   │    + Service-Auth JWT       │
+    │    did:web:push.example.org   │    + Service-Auth JWT      │
     │                               │                            │── store token in SQLite
     │                               │                            │
-    │                               │                    Jetstream│
-    │                               │                   (WebSocket)
+    │                               │                 Jetstream  │
+    │                               │                (WebSocket) |
     │                               │                            │── match event to DID
     │                               │                            │── check block graph
     │                               │                            │── construct payload
@@ -25,7 +30,6 @@ Your App                        PDS (user's)              push.example.org
 ```
 
 The gateway:
-
 1. **Registers tokens** via the standard `app.bsky.notification.registerPush` XRPC endpoint
 2. **Listens to Jetstream** for real-time events (likes, replies, reposts, follows, mentions, quotes)
 3. **Matches events** against registered DIDs using an in-memory hashmap (O(1) lookup)
@@ -34,22 +38,22 @@ The gateway:
 
 ## Supported Events
 
-| Event             | Default Title        | Default Body                          |
-| ----------------- | -------------------- | ------------------------------------- |
-| Like              | New like             | X liked your post                     |
-| Repost            | New repost           | X reposted your post                  |
-| Reply             | New reply            | X replied to your post                |
-| Mention           | New mention          | X mentioned you                       |
-| Quote             | New quote            | X quoted your post                    |
-| Follow            | New follower         | X followed you                        |
-| Like via repost   | New like             | X liked a post you reposted           |
-| Repost via repost | New repost           | X reposted a post you reposted        |
-| Verified          | Verified             | Your account has been verified        |
-| Unverified        | Verification removed | Your account verification was removed |
+| Event | Default Title | Default Body |
+|---|---|---|
+| Like | New like | X liked your post *(or `X liked your post: <post text>` when text is available)* |
+| Repost | New repost | X reposted your post *(or `X reposted your post: <post text>`)* |
+| Reply | New reply | X replied to your post *(or `X replied: <post text>`)* |
+| Mention | New mention | X mentioned you *(or `X mentioned you: <post text>`)* |
+| Quote | New quote | X quoted your post *(or `X quoted your post: <post text>`)* |
+| Follow | New follower | X followed you |
+| Like via repost | New like | X liked a post you reposted *(or `…: <post text>`)* |
+| Repost via repost | New repost | X reposted a post you reposted *(or `…: <post text>`)* |
+| Verified | Verified | Your account has been verified |
+| Unverified | Verification removed | Your account verification was removed |
 
 ### Push Payload
 
-The gateway sends English `title` and `body` as defaults, plus structured `data` fields for client-side localization. Clients with an iOS Notification Service Extension or Android background handler can use the `data` fields to format localized text and override the defaults. `mutableContent: true` tells iOS to invoke the NSE before display.
+The gateway sends English `title` and `body` as defaults, plus structured `data` fields for client-side localization. Clients with an iOS Notification Service Extension or Android background handler can use the `data` fields to format localized text and override the defaults. `mutableContent: true` tells iOS to invoke the NSE before display. See [docs/LOCALIZATION.md](docs/LOCALIZATION.md) for the rationale and the Android caveat around the `notification` block.
 
 ```json
 {
@@ -70,15 +74,16 @@ The gateway sends English `title` and `body` as defaults, plus structured `data`
 }
 ```
 
-| Data Field         | Description                                                                                                               |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| `reason`           | Notification type (like, repost, reply, mention, quote, follow, like-via-repost, repost-via-repost, verified, unverified) |
-| `uri`              | AT-URI of the record that caused the notification                                                                         |
-| `subject`          | AT-URI of the acted-upon post (present for like, repost, reply, quote, like-via-repost, repost-via-repost)                |
-| `recipientDid`     | DID of the recipient (for multi-account routing)                                                                          |
-| `actorDid`         | DID of the actor who performed the action                                                                                 |
-| `actorDisplayName` | Actor's display name (may be empty)                                                                                       |
-| `actorHandle`      | Actor's handle (may be empty)                                                                                             |
+| Data Field | Description |
+|---|---|
+| `reason` | Notification type (like, repost, reply, mention, quote, follow, like-via-repost, repost-via-repost, verified, unverified) |
+| `uri` | AT-URI of the record that caused the notification |
+| `subject` | AT-URI of the acted-upon post (present for like, repost, reply, quote, like-via-repost, repost-via-repost) |
+| `recipientDid` | DID of the recipient (for multi-account routing) |
+| `actorDid` | DID of the actor who performed the action |
+| `actorDisplayName` | Actor's display name (may be empty) |
+| `actorHandle` | Actor's handle (may be empty) |
+| `reasonSubject` | Post text for `reply`, `quote`, `mention` (inline from Jetstream) and for `like`, `repost`, `like-via-repost`, `repost-via-repost` (lazy-fetched via AppView, cached). Sanitized, truncated to `PUSH_POST_TEXT_MAX_GRAPHEMES`. Omitted on fetch miss / error or when `PUSH_POST_TEXT_FETCH=false` — see [docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md#post-text-limits). |
 
 ## Quick Start
 
@@ -96,7 +101,6 @@ DEV_MODE=true go run ./cmd/server
 With `DEV_MODE=true`, the server binds to `127.0.0.1` by default. Set `DEV_MODE_ALLOW_PUBLIC=true` only if you intentionally want to expose dev mode on a public interface.
 
 The gateway starts on port 8080 and serves:
-
 - `POST /xrpc/app.bsky.notification.registerPush` — Token registration
 - `POST /xrpc/app.bsky.notification.unregisterPush` — Token removal
 - `GET /.well-known/did.json` — DID document for service discovery
@@ -105,7 +109,6 @@ The gateway starts on port 8080 and serves:
 The Jetstream connection is opened after the first token is registered.
 
 In dev mode, additional test endpoints are available:
-
 - `POST /test/register` — Register a token without JWT auth
 - `POST /test/push` — Check registered tokens for a DID
 
@@ -175,40 +178,55 @@ docker run -d \
 
 ## Configuration
 
-| Environment Variable         | Default                                           | Description                                                                                                            |
-| ---------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `PUSH_GATEWAY_DID`           | `did:web:localhost`                               | Your service DID (e.g. `did:web:push.example.org`). Must be a `did:web:` DID.                                          |
-| `PUSH_GATEWAY_PORT`          | `8080`                                            | HTTP server port                                                                                                       |
-| `SQLITE_PATH`                | `./push-gateway.db`                               | Path to SQLite database file                                                                                           |
-| `JETSTREAM_URL`              | `wss://jetstream2.us-east.bsky.network/subscribe` | Jetstream WebSocket URL                                                                                                |
-| `EXPO_PUSH_ACCESS_TOKEN`     | (empty)                                           | Expo Push API access token                                                                                             |
-| `DEV_MODE`                   | (empty)                                           | Set to `true` to enable test endpoints and allow the `X-Actor-DID` header to bypass JWT verification for local testing |
-| `DEV_MODE_ALLOW_PUBLIC`      | (empty)                                           | Set to `true` to bind dev mode publicly; otherwise `DEV_MODE=true` binds to `127.0.0.1` only                           |
-| `APNS_KEY_PATH`              | (empty)                                           | Path to APNs .p8 key file (for direct APNs delivery)                                                                   |
-| `APNS_KEY_BASE64`            | (empty)                                           | Base64-encoded APNs .p8 key (alternative to file path)                                                                 |
-| `APNS_KEY_ID`                | (empty)                                           | APNs Key ID (from Apple Developer Portal)                                                                              |
-| `APNS_TEAM_ID`               | (empty)                                           | Apple Developer Team ID                                                                                                |
-| `APNS_TOPIC`                 | (empty)                                           | APNs topic / iOS bundle ID (e.g. `org.example.app`)                                                                    |
-| `APNS_SANDBOX`               | (empty)                                           | Set to `true` for APNs sandbox (dev/preview builds)                                                                    |
-| `FCM_SERVICE_ACCOUNT_PATH`   | (empty)                                           | Path to Firebase service account JSON (for direct FCM delivery)                                                        |
-| `FCM_SERVICE_ACCOUNT_BASE64` | (empty)                                           | Base64-encoded service account JSON (alternative to file path)                                                         |
+| Environment Variable | Default | Description |
+|---|---|---|
+| `PUSH_GATEWAY_DID` | `did:web:localhost` | Your service DID (e.g. `did:web:push.example.org`). Must be a `did:web:` DID. |
+| `PUSH_GATEWAY_PORT` | `8080` | HTTP server port |
+| `SQLITE_PATH` | `./push-gateway.db` | Path to SQLite database file |
+| `JETSTREAM_URL` | `wss://jetstream2.us-east.bsky.network/subscribe` | Jetstream WebSocket URL |
+| `EXPO_PUSH_ACCESS_TOKEN` | (empty) | Expo Push API access token |
+| `RELAY_ENABLED` | (empty) | Set to `true` to run the Fediverse Web Push relay. Requires `FCM_DATA_ONLY=true`. Endpoint URLs are derived from `PUSH_GATEWAY_DID`. See [docs/WEBPUSH_RELAY.md](docs/WEBPUSH_RELAY.md). |
+| `DEV_MODE` | (empty) | Set to `true` to enable test endpoints and allow the `X-Actor-DID` header to bypass JWT verification for local testing |
+| `DEV_MODE_ALLOW_PUBLIC` | (empty) | Set to `true` to bind dev mode publicly; otherwise `DEV_MODE=true` binds to `127.0.0.1` only |
+| `APNS_KEY_PATH` | (empty) | Path to APNs .p8 key file (for direct APNs delivery) |
+| `APNS_KEY_BASE64` | (empty) | Base64-encoded APNs .p8 key (alternative to file path) |
+| `APNS_KEY_ID` | (empty) | APNs Key ID (from Apple Developer Portal) |
+| `APNS_TEAM_ID` | (empty) | Apple Developer Team ID |
+| `APNS_TOPIC` | (empty) | APNs topic / iOS bundle ID (e.g. `org.example.app`) |
+| `APNS_SANDBOX` | (empty) | Set to `true` for APNs sandbox (dev/preview builds) |
+| `FCM_SERVICE_ACCOUNT_PATH` | (empty) | Path to Firebase service account JSON (for direct FCM delivery) |
+| `FCM_SERVICE_ACCOUNT_BASE64` | (empty) | Base64-encoded service account JSON (alternative to file path) |
+| `FCM_DATA_ONLY` | (empty) | Set to `true` to send Android pushes as data-only messages so clients can localize via `FirebaseMessagingService`. Only enable if every Android client handles data messages — see [docs/LOCALIZATION.md](docs/LOCALIZATION.md#required-android-behavior) |
+| `LOG_LEVEL` | `info` | Set to `debug` to log truncated push token prefixes; otherwise tokens are logged as `[redacted]` |
+| `DID_CACHE_SIZE` | `10000` | Max entries in the DID document cache (oldest quarter evicted when full) |
+| `PROFILE_CACHE_SIZE` | `10000` | Max entries in the profile/display name cache (oldest quarter evicted when full) |
+| `JETSTREAM_MAX_DECOMPRESSED_BYTES` | `8388608` (8 MiB) | Max decompressed size of a single Jetstream zstd frame (decompression bomb protection) |
+| `PUSH_POST_TEXT_MAX_GRAPHEMES` | `300` | Max length (codepoints) of the post text included as `reasonSubject`. Matches Bluesky's `MAX_GRAPHEMES` post limit. |
+| `PUSH_APPVIEW_URL` | `https://public.api.bsky.app` | AppView base URL. Used by both the profile resolver (display names) and the post-text resolver (lazy fetch for like/repost variants). |
+| `PUSH_POST_TEXT_FETCH` | `true` | Set to `false` to disable lazy fetching of post text for `like` / `repost` / `like-via-repost` / `repost-via-repost`. `reply` / `quote` / `mention` still carry inline text from Jetstream regardless. |
+| `PUSH_POST_TEXT_CACHE_SIZE` | `10000` | Max entries in the post-text cache (oldest quarter evicted when full). |
+| `ORIGIN_VERIFY_SECRET` | (empty) | Shared secret required on every request. When set, requests missing the header or carrying the wrong value are rejected with `403`. Empty disables the check. See [Origin Verify](#origin-verify-cdn--waf-shared-secret). |
+| `ORIGIN_VERIFY_HEADER_NAME` | `X-Origin-Verify` | Name of the request header carrying the shared secret. |
+| `ORIGIN_VERIFY_EXCLUDE_HEALTH` | (empty) | Set to `true` to exempt `GET /health` from the origin-verify check (useful when LB / k8s probes can't set custom headers). |
+| `ORIGIN_VERIFY_EXCLUDE_DID_JSON` | (empty) | Set to `true` to exempt `GET /.well-known/did.json` from the origin-verify check. |
 
 ## Runtime Defaults
 
-| Area                  | Default                                                                                                                                                                     | Notes                                                                                                                  |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Dev mode binding      | `127.0.0.1:$PUSH_GATEWAY_PORT`                                                                                                                                              | Applies when `DEV_MODE=true`. Set `DEV_MODE_ALLOW_PUBLIC=true` to bind publicly in dev mode.                           |
-| HTTP server           | `ReadHeaderTimeout=10s`, `ReadTimeout=30s`, `WriteTimeout=30s`, `IdleTimeout=120s`, `MaxHeaderBytes=64 KiB`                                                                 | Protects against slow or oversized requests.                                                                           |
-| XRPC body size        | `64 KiB`                                                                                                                                                                    | Applies to `registerPush` and `unregisterPush`.                                                                        |
-| Token / app ID size   | `token <= 2048`, `appId <= 256`                                                                                                                                             | Oversized values are rejected with `400`.                                                                              |
-| JWT checks            | `aud` must equal `PUSH_GATEWAY_DID`, `lxm` must match the called XRPC method, `exp` is required and may be at most `5m` in the future, only `ES256` / `ES256K` are accepted | The JSON body `serviceDid` must also match this gateway.                                                               |
-| DID resolution        | `10s` HTTP timeout, `5s` DNS timeout, `3` redirects max, `256 KiB` document cap                                                                                             | `did:web` resolution refuses localhost, loopback, private, link-local, CGNAT, and IMDS-style targets.                  |
-| Outbound HTTP         | `10s` timeout                                                                                                                                                               | Applies to Expo, APNs, FCM, and block-backfill requests.                                                               |
-| Jetstream WebSocket   | ping every `20s`, read timeout `60s`, write timeout `10s`, frame cap `1 MiB`                                                                                                | Reconnects with exponential backoff up to `60s`.                                                                       |
-| Jetstream dispatch    | `8` workers, queue size `1024`                                                                                                                                              | If the queue fills, new events are dropped and counted in `/health` as `eventsDropped`.                                |
-| Registered tokens     | max `20` per DID                                                                                                                                                            | Additional registrations for the same DID are rejected.                                                                |
-| Invalid token cleanup | automatic                                                                                                                                                                   | APNs `410` / `Unregistered` / `BadDeviceToken` and FCM `UNREGISTERED` / `NOT_FOUND` responses remove the stored token. |
-| Block backfill        | `100` records/page, max `20` pages                                                                                                                                          | On first token registration, historical blocks are backfilled once from the public AppView.                            |
+| Area | Default | Notes |
+|---|---|---|
+| Dev mode binding | `127.0.0.1:$PUSH_GATEWAY_PORT` | Applies when `DEV_MODE=true`. Set `DEV_MODE_ALLOW_PUBLIC=true` to bind publicly in dev mode. |
+| HTTP server | `ReadHeaderTimeout=10s`, `ReadTimeout=30s`, `WriteTimeout=30s`, `IdleTimeout=120s`, `MaxHeaderBytes=64 KiB` | Protects against slow or oversized requests. |
+| XRPC body size | `64 KiB` | Applies to `registerPush` and `unregisterPush`. |
+| Token / app ID size | `token <= 2048`, `appId <= 256` | Oversized values are rejected with `400`. |
+| JWT checks | `aud` must equal `PUSH_GATEWAY_DID`, `lxm` must match the called XRPC method, `exp` is required and may be at most `5m` in the future, only `ES256` / `ES256K` are accepted | The JSON body `serviceDid` must also match this gateway. |
+| DID resolution | `10s` HTTP timeout, `5s` DNS timeout, `3` redirects max, `256 KiB` document cap, cache capped at `DID_CACHE_SIZE` | `did:web` resolution refuses localhost, loopback, private, link-local, CGNAT, and IMDS-style targets. |
+| Outbound HTTP | `10s` timeout | Applies to Expo, APNs, FCM, and block-backfill requests. |
+| Jetstream WebSocket | ping every `20s`, read timeout `60s`, write timeout `10s`, frame cap `1 MiB`, decompressed frame cap `8 MiB` (`JETSTREAM_MAX_DECOMPRESSED_BYTES`) | Reconnects with exponential backoff up to `60s`. |
+| Jetstream dispatch | `8` workers, queue size `1024` | If the queue fills, new events are dropped and counted in `/health` as `eventsDropped`. |
+| Registered tokens | max `20` per DID | Additional registrations for the same DID are rejected. |
+| Invalid token cleanup | automatic | APNs `410` / `Unregistered` / `BadDeviceToken` and FCM `UNREGISTERED` / `NOT_FOUND` responses remove the stored token. |
+| Android FCM payload | notification message (OS renders text) | Set `FCM_DATA_ONLY=true` for data-only delivery so clients localize via `FirebaseMessagingService`. |
+| Block backfill | `100` records/page, max `20` pages | On first token registration, historical blocks are backfilled once from the public AppView. |
 
 ## Production Setup
 
@@ -220,13 +238,11 @@ Host `/.well-known/did.json` on your domain:
 {
   "@context": ["https://www.w3.org/ns/did/v1"],
   "id": "did:web:push.example.org",
-  "service": [
-    {
-      "id": "#bsky_notif",
-      "type": "BskyNotificationService",
-      "serviceEndpoint": "https://push.example.org"
-    }
-  ]
+  "service": [{
+    "id": "#bsky_notif",
+    "type": "BskyNotificationService",
+    "serviceEndpoint": "https://push.example.org"
+  }]
 }
 ```
 
@@ -237,19 +253,16 @@ The gateway serves this automatically based on `PUSH_GATEWAY_DID`.
 In your ATproto client, call `registerPush` with your gateway's DID:
 
 ```typescript
-agent.app.bsky.notification.registerPush(
-  {
-    serviceDid: "did:web:push.example.org",
-    token: devicePushToken,
-    platform: "ios", // or 'android'
-    appId: "org.example.app",
+agent.app.bsky.notification.registerPush({
+  serviceDid: 'did:web:push.example.org',
+  token: devicePushToken,
+  platform: 'ios', // or 'android'
+  appId: 'org.example.app',
+}, {
+  headers: {
+    'atproto-proxy': 'did:web:push.example.org#bsky_notif',
   },
-  {
-    headers: {
-      "atproto-proxy": "did:web:push.example.org#bsky_notif",
-    },
-  },
-);
+});
 ```
 
 The `serviceDid` field must exactly match `PUSH_GATEWAY_DID`; mismatches are rejected.
@@ -269,7 +282,7 @@ The service must be reachable via HTTPS (required for DID document resolution an
 
 ### Why Not Use Bluesky's Push Service?
 
-Bluesky's push infrastructure (`push.bsky.app`) is closed source and **does not send push notifications to third-party apps**. This was confirmed by Bluesky engineer pfrazee in [GitHub Discussion #1914](https://github.com/bluesky-social/atproto/discussions/1914): _"Bluesky will not send push notifications to 3rd parties. You have to setup your own backend to do that."_
+Bluesky's push infrastructure (`push.bsky.app`) is closed source and **does not send push notifications to third-party apps**. This was confirmed by Bluesky engineer pfrazee in [GitHub Discussion #1914](https://github.com/bluesky-social/atproto/discussions/1914): *"Bluesky will not send push notifications to 3rd parties. You have to setup your own backend to do that."*
 
 The `registerPush` call succeeds (returns 200 OK) because the PDS stores the token, but the push delivery service at `push.bsky.app` only has the APNs/FCM certificates for `xyz.blueskyweb.app` — it cannot push to your app's bundle ID.
 
@@ -297,11 +310,11 @@ Client App → PDS (proxy) → YOUR push gateway (push.example.org)
 
 The gateway subscribes to [Jetstream](https://github.com/bluesky-social/jetstream) instead of the raw firehose:
 
-| Mode                                | Bandwidth/Day | Factor        |
-| ----------------------------------- | ------------- | ------------- |
-| Raw Firehose (CBOR/CAR)             | ~232 GB       | Baseline      |
-| Jetstream uncompressed (JSON)       | ~5-10 GB      | ~25x smaller  |
-| **Jetstream + zstd** (this gateway) | **~850 MB**   | ~270x smaller |
+| Mode | Bandwidth/Day | Factor |
+|---|---|---|
+| Raw Firehose (CBOR/CAR) | ~232 GB | Baseline |
+| Jetstream uncompressed (JSON) | ~5-10 GB | ~25x smaller |
+| **Jetstream + zstd** (this gateway) | **~850 MB** | ~270x smaller |
 
 zstd compression reduces bandwidth by ~85-90% vs uncompressed JSON. CPU overhead for decompression is minimal (~1-2% of a core at full stream).
 
@@ -320,14 +333,28 @@ The PDS forwards `registerPush` calls with an inter-service JWT signed by the us
 5. Refuses unsafe `did:web` resolution targets such as localhost, private ranges, loopback, link-local, and IMDS-style addresses
 6. Extracts the `#atproto` signing key from the DID document and verifies the ECDSA signature (`ES256` P-256 and `ES256K` secp256k1 only)
 
+### Origin Verify (CDN / WAF shared secret)
+
+Mirrors the AWS CloudFront pattern "Restricting access to your origin through CloudFront using a custom header" — Cloudflare offers the same via Transform Rules. When deployed behind a CDN / WAF, configure the proxy to inject a shared-secret header on every forwarded request and set the matching `ORIGIN_VERIFY_SECRET` on the gateway. Direct origin-bypass requests (e.g. someone discovering the origin IP) are rejected with `403`.
+
+- `ORIGIN_VERIFY_SECRET` — when **unset**, the check is disabled (default).
+- `ORIGIN_VERIFY_HEADER_NAME` — header to inspect; defaults to `X-Origin-Verify`.
+- `ORIGIN_VERIFY_EXCLUDE_HEALTH` — set to `true` to exempt `GET /health` (useful when LB / k8s probes can't set custom headers).
+- `ORIGIN_VERIFY_EXCLUDE_DID_JSON` — set to `true` to exempt `GET /.well-known/did.json`.
+
+By default **all** endpoints are gated, including `/health` and `/.well-known/did.json`, on the assumption that every caller reaches the gateway through the CDN-fronted hostname (which the CDN proxies and decorates with the secret). PDSes resolving the service DID, PDSes forwarding `registerPush`, and clients calling XRPC all go through the same path.
+
+Comparison uses `crypto/subtle.ConstantTimeCompare` to avoid timing leaks. Mismatches are logged with the method, path, and remote address — the offered value is **not** logged.
+
+Example Cloudflare Transform Rule: add request header `X-Origin-Verify` with value `<your-secret>` for hostname `push.example.org`. Example AWS CloudFront: add a custom origin request header in the distribution config; combine with a WAF rule rejecting any request reaching the ALB / origin that lacks the header (the gateway already enforces it, but a WAF rule keeps load off the origin).
+
 ### Display Name Resolution
 
-Push notification bodies show display names ("Alice liked your post") instead of raw DIDs. Names are resolved via the public AppView API (`app.bsky.actor.getProfile`) and cached in memory (1 hour TTL, max 10,000 entries).
+Push notification bodies show display names ("Alice liked your post") instead of raw DIDs. Names are resolved via the public AppView API (`app.bsky.actor.getProfile`) and cached in memory (1 hour TTL, max 10,000 entries by default — see `PROFILE_CACHE_SIZE`).
 
 ## Block Handling
 
 The gateway maintains a real-time block graph:
-
 - `app.bsky.graph.block` events consumed via Jetstream
 - On first token registration for a DID, historical blocks are backfilled once from the public AppView (100 records/page, up to 20 pages)
 - Before sending any push: bidirectional block check (has recipient blocked actor? has actor blocked recipient?)
@@ -344,7 +371,6 @@ The gateway sends English `title` and `body` as defaults. Clients can override t
 iOS apps can add a [Notification Service Extension](https://developer.apple.com/documentation/usernotifications/modifying-content-in-newly-delivered-notifications) that intercepts push notifications before display. The NSE reads `reason`, `actorDisplayName`, and `actorHandle` from the payload's `data` dictionary and sets localized `title` and `body`.
 
 Requirements:
-
 - `mutableContent: true` in the payload (set by the gateway)
 - A non-empty `title` and `body` in the APNs alert (the gateway sends English defaults)
 - An NSE target in your Xcode project
@@ -370,21 +396,25 @@ default:
 
 The NSE has ~30 seconds to modify the notification. If it times out, iOS displays the original English text.
 
-### Android: Background Handler
+### Android: `FirebaseMessagingService`
 
-Android apps can use a background message handler (e.g. via `expo-notifications` or Firebase's `onMessageReceived`) to modify notification content before display. The `data` fields are available in the message payload.
+To rewrite notification content before display, Android clients must subclass `FirebaseMessagingService` and override `onMessageReceived(RemoteMessage)`. The `data` fields are available there.
 
-The gateway sets `android.notification.channel_id` to the `reason` value, so users can configure per-type notification settings (sound, vibration, importance) in Android system settings.
+⚠️ **Caveat:** `onMessageReceived` only fires for backgrounded apps when the FCM payload is **data-only**. By default the gateway ships every Android push with both `notification` *and* `data` — Android renders the `notification` block via the OS and never wakes the app, so client-side rewriting is impossible. Set **`FCM_DATA_ONLY=true`** to switch direct FCM to data-only: the gateway then drops the `notification` block, keeps `android.priority: high`, and carries the English `title`/`body` plus `channelId` in the `data` payload. Only enable this if every Android client implements a `FirebaseMessagingService` — clients without one will display nothing while backgrounded. See [docs/LOCALIZATION.md](docs/LOCALIZATION.md#required-android-behavior).
+
+In the default (notification) mode the gateway sets `android.notification.channel_id` to the `reason` value, so users can configure per-type notification settings (sound, vibration, importance) in Android system settings. In data-only mode the client picks the channel from the `channelId` data field.
 
 ### Data Fields for Localization
 
-| Field              | Example             | Use                                          |
-| ------------------ | ------------------- | -------------------------------------------- |
-| `reason`           | `like`              | Determines notification template             |
-| `actorDisplayName` | `Alice`             | Actor's display name (preferred)             |
-| `actorHandle`      | `alice.bsky.social` | Actor's handle (fallback if no display name) |
+| Field | Example | Use |
+|---|---|---|
+| `reason` | `like` | Determines notification template |
+| `actorDisplayName` | `Alice` | Actor's display name (preferred) |
+| `actorHandle` | `alice.bsky.social` | Actor's handle (fallback if no display name) |
 
 Supported `reason` values: `like`, `repost`, `reply`, `mention`, `quote`, `follow`, `like-via-repost`, `repost-via-repost`, `verified`, `unverified`
+
+With `FCM_DATA_ONLY=true`, the Android `data` payload additionally carries `title`, `body` (the English fallback) and `channelId` (equal to `reason`) so the client can render without inspecting the omitted `notification` block.
 
 ## Roadmap
 

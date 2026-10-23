@@ -7,13 +7,18 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/dracoblue/atproto-push-gateway/internal/did"
 	"github.com/dracoblue/atproto-push-gateway/internal/jetstream"
+	"github.com/dracoblue/atproto-push-gateway/internal/originverify"
+	"github.com/dracoblue/atproto-push-gateway/internal/posttext"
 	"github.com/dracoblue/atproto-push-gateway/internal/profile"
 	"github.com/dracoblue/atproto-push-gateway/internal/push"
+	"github.com/dracoblue/atproto-push-gateway/internal/relay"
 	"github.com/dracoblue/atproto-push-gateway/internal/store"
 	"github.com/dracoblue/atproto-push-gateway/internal/xrpc"
 )
@@ -23,6 +28,18 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func getEnvInt64(key string, fallback int64) int64 {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n <= 0 {
+		log.Fatalf("%s must be a positive integer (got %q)", key, v)
+	}
+	return n
 }
 
 func main() {
@@ -36,6 +53,26 @@ func main() {
 	expoPushToken := getEnv("EXPO_PUSH_ACCESS_TOKEN", "")
 	devMode := getEnv("DEV_MODE", "") == "true"
 	devModeAllowPublic := getEnv("DEV_MODE_ALLOW_PUBLIC", "") == "true"
+	logLevel := getEnv("LOG_LEVEL", "info")
+	didCacheSize := getEnvInt64("DID_CACHE_SIZE", 10000)
+	profileCacheSize := getEnvInt64("PROFILE_CACHE_SIZE", 10000)
+	maxDecompressedBytes := getEnvInt64("JETSTREAM_MAX_DECOMPRESSED_BYTES", 8<<20)
+	postTextMaxGraphemes := getEnvInt64("PUSH_POST_TEXT_MAX_GRAPHEMES", 300)
+	appViewURL := getEnv("PUSH_APPVIEW_URL", "https://public.api.bsky.app")
+	// Fediverse web push relay. The public origin is always the one derived
+	// from PUSH_GATEWAY_DID, the same way the DID document's serviceEndpoint
+	// is, so there is exactly one place the gateway's origin is configured.
+	relayEnabled := getEnv("RELAY_ENABLED", "") == "true"
+	postTextFetch := getEnv("PUSH_POST_TEXT_FETCH", "true") == "true"
+	postTextCacheSize := getEnvInt64("PUSH_POST_TEXT_CACHE_SIZE", 10000)
+
+	// Origin-verify shared-secret middleware (AWS CloudFront / Cloudflare
+	// custom-header pattern). When ORIGIN_VERIFY_SECRET is empty the
+	// middleware is a no-op pass-through.
+	originVerifySecret := getEnv("ORIGIN_VERIFY_SECRET", "")
+	originVerifyHeader := getEnv("ORIGIN_VERIFY_HEADER_NAME", "X-Origin-Verify")
+	originVerifyExcludeHealth := getEnv("ORIGIN_VERIFY_EXCLUDE_HEALTH", "") == "true"
+	originVerifyExcludeDIDJSON := getEnv("ORIGIN_VERIFY_EXCLUDE_DID_JSON", "") == "true"
 
 	// APNs direct delivery (optional)
 	apnsKeyPath := getEnv("APNS_KEY_PATH", "")
@@ -48,6 +85,7 @@ func main() {
 	// FCM direct delivery (optional)
 	fcmServiceAccountPath := getEnv("FCM_SERVICE_ACCOUNT_PATH", "")
 	fcmServiceAccountBase64 := getEnv("FCM_SERVICE_ACCOUNT_BASE64", "")
+	fcmDataOnly := getEnv("FCM_DATA_ONLY", "") == "true"
 
 	log.Printf("Starting atproto-push-gateway")
 	log.Printf("  DID:       %s", serviceDID)
@@ -74,6 +112,7 @@ func main() {
 	log.Printf("  Loaded: %d tokens, %d blocks, %d DIDs", tokens, blocks, dids)
 
 	// Initialize push sender
+	push.SetDebugLogging(strings.EqualFold(logLevel, "debug"))
 	sender := push.NewMultiSender(expoPushToken)
 
 	// Configure direct APNs if key is available (file path or base64)
@@ -101,10 +140,10 @@ func main() {
 		if apnsSender != nil {
 			sender.APNs = apnsSender
 			env := "production"
-		if apnsSandbox {
-			env = "sandbox"
-		}
-		log.Printf("  APNs:      enabled (key=%s, team=%s, topic=%s, env=%s)", apnsKeyID, apnsTeamID, apnsTopic, env)
+			if apnsSandbox {
+				env = "sandbox"
+			}
+			log.Printf("  APNs:      enabled (key=%s, team=%s, topic=%s, env=%s)", apnsKeyID, apnsTeamID, apnsTopic, env)
 		} else {
 			log.Printf("  APNs:      disabled (no key configured)")
 		}
@@ -133,23 +172,91 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to initialize FCM sender: %v", err)
 		}
+		fcmSender.SetDataOnly(fcmDataOnly)
 		sender.FCM = fcmSender
-		log.Printf("  FCM:       enabled")
+		if fcmDataOnly {
+			log.Printf("  FCM:       enabled (data-only — clients localize via FirebaseMessagingService)")
+		} else {
+			log.Printf("  FCM:       enabled (notification messages — OS renders text)")
+		}
 	} else {
 		log.Printf("  FCM:       disabled (using Expo for Android)")
 	}
 
 	// Initialize profile resolver for display names
-	profileResolver := profile.NewResolver()
+	profileResolver := profile.NewResolverWithCacheSize(int(profileCacheSize))
+	profileResolver.SetAPIBaseURL(appViewURL)
 
 	// Initialize Jetstream consumer
 	consumer := jetstream.NewConsumer(jetstreamURL, s, sender, profileResolver)
+	consumer.SetMaxDecompressedBytes(maxDecompressedBytes)
+	consumer.SetPostTextMaxGraphemes(int(postTextMaxGraphemes))
+
+	// Lazy post-text fetching for like / repost / *-via-repost. Disabled
+	// when PUSH_POST_TEXT_FETCH=false. Reply / quote / mention always carry
+	// their text inline from Jetstream and don't depend on this.
+	if postTextFetch {
+		postTextResolver := posttext.NewResolverWithCacheSize(int(postTextCacheSize))
+		postTextResolver.SetAPIBaseURL(appViewURL)
+		consumer.SetPostTextResolver(postTextResolver)
+		log.Printf("  PostText:  enabled (appview=%s, cache=%d)", appViewURL, postTextCacheSize)
+	} else {
+		log.Printf("  PostText:  disabled (PUSH_POST_TEXT_FETCH=false)")
+	}
 	go consumer.Run()
 
 	// Initialize HTTP server
 	mux := http.NewServeMux()
 	handler := xrpc.NewHandler(s, devMode, serviceDID, func() interface{} { return consumer.GetStats() }, consumer.NotifyTokenRegistered)
+	handler.SetDIDResolver(did.NewResolverWithCacheSize(int(didCacheSize)))
 	handler.RegisterRoutes(mux, serviceDID)
+
+	// Fediverse web push relay (Mastodon and compatible).
+	//
+	// The relay requires FCM_DATA_ONLY. It forwards ciphertext that only the
+	// device can read, so Android delivery has to be a data message: a
+	// notification message would be rendered by the OS as the bare
+	// placeholder, and the client holding the decryption key would never be
+	// woken. Rather than overriding the setting per message, the relay simply
+	// refuses to run without it — a relay that silently delivers unreadable
+	// notifications to every Android user is worse than one that is off.
+	if relayEnabled {
+		if !fcmDataOnly {
+			log.Fatalf("RELAY_ENABLED is true but FCM_DATA_ONLY is not \"true\": " +
+				"the web push relay forwards ciphertext the client must decrypt, " +
+				"which only reaches the client as a data message. Set " +
+				"FCM_DATA_ONLY=true, or unset RELAY_ENABLED to disable the relay.")
+		}
+
+		// Same derivation as the DID document's serviceEndpoint.
+		baseURL := "https://" + strings.TrimPrefix(serviceDID, "did:web:")
+
+		relay.NewHandler(s, sender, baseURL).RegisterRoutes(mux)
+		log.Printf("Web push relay enabled, endpoints under %s/relay/", baseURL)
+	} else {
+		log.Printf("Web push relay disabled (set RELAY_ENABLED=true to enable)")
+	}
+
+	rootHandler := originverify.Wrap(mux, originverify.Config{
+		Secret:         originVerifySecret,
+		HeaderName:     originVerifyHeader,
+		ExcludeHealth:  originVerifyExcludeHealth,
+		ExcludeDIDJSON: originVerifyExcludeDIDJSON,
+	})
+	if originVerifySecret != "" {
+		exempt := []string{}
+		if originVerifyExcludeHealth {
+			exempt = append(exempt, "/health")
+		}
+		if originVerifyExcludeDIDJSON {
+			exempt = append(exempt, "/.well-known/did.json")
+		}
+		exemptStr := "none"
+		if len(exempt) > 0 {
+			exemptStr = strings.Join(exempt, ", ")
+		}
+		log.Printf("  OriginVerify: enabled (header=%s, exempt=%s)", originVerifyHeader, exemptStr)
+	}
 
 	bindAddr := ":" + port
 	if devMode && !devModeAllowPublic {
@@ -159,7 +266,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              bindAddr,
-		Handler:           mux,
+		Handler:           rootHandler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

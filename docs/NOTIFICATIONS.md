@@ -9,7 +9,6 @@ This document describes which ATproto record types trigger push notifications, w
 **Trigger:** `app.bsky.feed.like` record created
 
 **Jetstream Event:**
-
 ```json
 {
   "did": "did:plc:alice",
@@ -32,8 +31,9 @@ This document describes which ATproto record types trigger push notifications, w
 
 **Target DID extraction:** `record.subject.uri` → authority part → `did:plc:bob`
 
-**Push Payload:**
+**Body template:** `"%s liked your post: %s"` when text is available, otherwise `"%s liked your post"`.
 
+**Push Payload:**
 ```json
 {
   "to": "<push-token>",
@@ -43,10 +43,13 @@ This document describes which ATproto record types trigger push notifications, w
     "subject": "at://did:plc:bob/app.bsky.feed.post/abc123",
     "actorDid": "did:plc:alice",
     "actorDisplayName": "Alice",
-    "actorHandle": "alice.bsky.social"
+    "actorHandle": "alice.bsky.social",
+    "reasonSubject": "Hello world"
   }
 }
 ```
+
+**Post text:** Lazy-fetched via the AppView's `app.bsky.feed.getPosts` after all delivery gates pass (registered, not blocked, tokens present), then cached. On fetch error or cache miss the notification is sent **without** `reasonSubject`. Disabled when `PUSH_POST_TEXT_FETCH=false`. See [Post Text Limits](#post-text-limits).
 
 ---
 
@@ -55,7 +58,6 @@ This document describes which ATproto record types trigger push notifications, w
 **Trigger:** `app.bsky.feed.repost` record created
 
 **Jetstream Event:**
-
 ```json
 {
   "did": "did:plc:alice",
@@ -78,8 +80,9 @@ This document describes which ATproto record types trigger push notifications, w
 
 **Target DID extraction:** `record.subject.uri` → authority part → `did:plc:bob`
 
-**Push Payload:**
+**Body template:** `"%s reposted your post: %s"` when text is available, otherwise `"%s reposted your post"`.
 
+**Push Payload:**
 ```json
 {
   "to": "<push-token>",
@@ -89,10 +92,13 @@ This document describes which ATproto record types trigger push notifications, w
     "subject": "at://did:plc:bob/app.bsky.feed.post/abc123",
     "actorDid": "did:plc:alice",
     "actorDisplayName": "Alice",
-    "actorHandle": "alice.bsky.social"
+    "actorHandle": "alice.bsky.social",
+    "reasonSubject": "Hello world"
   }
 }
 ```
+
+**Post text:** Lazy-fetched — same path as `like`. See [Post Text Limits](#post-text-limits).
 
 ---
 
@@ -101,7 +107,6 @@ This document describes which ATproto record types trigger push notifications, w
 **Trigger:** `app.bsky.feed.post` record created with `reply` field
 
 **Jetstream Event:**
-
 ```json
 {
   "did": "did:plc:alice",
@@ -131,8 +136,9 @@ This document describes which ATproto record types trigger push notifications, w
 
 **Target DID extraction:** `record.reply.parent.uri` → authority part → `did:plc:bob`
 
-**Push Payload:**
+**Body template:** `"%s replied: %s"` (e.g. `"Alice replied: Great post!"`). Without text, falls back to `"%s replied to your post"`.
 
+**Push Payload:**
 ```json
 {
   "to": "<push-token>",
@@ -142,10 +148,13 @@ This document describes which ATproto record types trigger push notifications, w
     "subject": "at://did:plc:bob/app.bsky.feed.post/abc123",
     "actorDid": "did:plc:alice",
     "actorDisplayName": "Alice",
-    "actorHandle": "alice.bsky.social"
+    "actorHandle": "alice.bsky.social",
+    "reasonSubject": "Great post!"
   }
 }
 ```
+
+**Post text:** Taken from `record.text` (the reply's own post body), sanitized (newlines → space, collapsed) and truncated. See [Post Text Limits](#post-text-limits).
 
 ---
 
@@ -154,7 +163,6 @@ This document describes which ATproto record types trigger push notifications, w
 **Trigger:** `app.bsky.feed.post` record created with `facets` containing `app.bsky.richtext.facet#mention`
 
 **Jetstream Event:**
-
 ```json
 {
   "did": "did:plc:alice",
@@ -166,17 +174,13 @@ This document describes which ATproto record types trigger push notifications, w
     "record": {
       "$type": "app.bsky.feed.post",
       "text": "Hey @bob check this out",
-      "facets": [
-        {
-          "index": { "byteStart": 4, "byteEnd": 8 },
-          "features": [
-            {
-              "$type": "app.bsky.richtext.facet#mention",
-              "did": "did:plc:bob"
-            }
-          ]
-        }
-      ],
+      "facets": [{
+        "index": { "byteStart": 4, "byteEnd": 8 },
+        "features": [{
+          "$type": "app.bsky.richtext.facet#mention",
+          "did": "did:plc:bob"
+        }]
+      }],
       "createdAt": "2026-04-11T12:00:00.000Z"
     }
   }
@@ -185,8 +189,9 @@ This document describes which ATproto record types trigger push notifications, w
 
 **Target DID extraction:** `record.facets[].features[]` where `$type === "app.bsky.richtext.facet#mention"` → `did` field
 
-**Push Payload:**
+**Body template:** `"%s mentioned you: %s"` (e.g. `"Alice mentioned you: Hey @bob check this out"`). Without text, falls back to `"%s mentioned you"`.
 
+**Push Payload:**
 ```json
 {
   "to": "<push-token>",
@@ -195,12 +200,15 @@ This document describes which ATproto record types trigger push notifications, w
     "uri": "at://did:plc:alice/app.bsky.feed.post/3kco5radef",
     "actorDid": "did:plc:alice",
     "actorDisplayName": "Alice",
-    "actorHandle": "alice.bsky.social"
+    "actorHandle": "alice.bsky.social",
+    "reasonSubject": "Hey @bob check this out"
   }
 }
 ```
 
 Note: For mentions, `uri` is the mentioning post (actor's post) and there is no `subject`. This matches how Bluesky's `listNotifications` API returns mention notifications — the `uri` field points to the post containing the mention.
+
+**Post text:** Taken from `record.text` (the mentioning post), sanitized and truncated. See [Post Text Limits](#post-text-limits).
 
 ---
 
@@ -209,7 +217,6 @@ Note: For mentions, `uri` is the mentioning post (actor's post) and there is no 
 **Trigger:** `app.bsky.feed.post` record created with `embed.$type === "app.bsky.embed.record"` pointing to another user's post
 
 **Jetstream Event:**
-
 ```json
 {
   "did": "did:plc:alice",
@@ -236,8 +243,9 @@ Note: For mentions, `uri` is the mentioning post (actor's post) and there is no 
 
 **Target DID extraction:** `record.embed.record.uri` → authority part → `did:plc:bob`
 
-**Push Payload:**
+**Body template:** `"%s quoted your post: %s"` (e.g. `"Alice quoted your post: This is so true!"`). Without text, falls back to `"%s quoted your post"`.
 
+**Push Payload:**
 ```json
 {
   "to": "<push-token>",
@@ -247,10 +255,13 @@ Note: For mentions, `uri` is the mentioning post (actor's post) and there is no 
     "subject": "at://did:plc:bob/app.bsky.feed.post/abc123",
     "actorDid": "did:plc:alice",
     "actorDisplayName": "Alice",
-    "actorHandle": "alice.bsky.social"
+    "actorHandle": "alice.bsky.social",
+    "reasonSubject": "This is so true!"
   }
 }
 ```
+
+**Post text:** Taken from `record.text` (the quoting post's body), sanitized and truncated. See [Post Text Limits](#post-text-limits).
 
 ---
 
@@ -259,7 +270,6 @@ Note: For mentions, `uri` is the mentioning post (actor's post) and there is no 
 **Trigger:** `app.bsky.graph.follow` record created
 
 **Jetstream Event:**
-
 ```json
 {
   "did": "did:plc:alice",
@@ -280,7 +290,6 @@ Note: For mentions, `uri` is the mentioning post (actor's post) and there is no 
 **Target DID extraction:** `record.subject` → `did:plc:bob`
 
 **Push Payload:**
-
 ```json
 {
   "to": "<push-token>",
@@ -294,6 +303,8 @@ Note: For mentions, `uri` is the mentioning post (actor's post) and there is no 
 }
 ```
 
+**Post text:** Not applicable — a follow has no associated post.
+
 ---
 
 ### like-via-repost
@@ -301,7 +312,6 @@ Note: For mentions, `uri` is the mentioning post (actor's post) and there is no 
 **Trigger:** `app.bsky.feed.like` record created with `via` field pointing to a repost
 
 **Jetstream Event:**
-
 ```json
 {
   "did": "did:plc:alice",
@@ -331,7 +341,6 @@ Note: For mentions, `uri` is the mentioning post (actor's post) and there is no 
 **Target DID extraction:** `record.via.uri` → authority part → `did:plc:carol` (the reposter)
 
 **Push Payload:**
-
 ```json
 {
   "to": "<push-token>",
@@ -341,10 +350,13 @@ Note: For mentions, `uri` is the mentioning post (actor's post) and there is no 
     "subject": "at://did:plc:bob/app.bsky.feed.post/postid123",
     "actorDid": "did:plc:alice",
     "actorDisplayName": "Alice",
-    "actorHandle": "alice.bsky.social"
+    "actorHandle": "alice.bsky.social",
+    "reasonSubject": "Hello world"
   }
 }
 ```
+
+**Post text:** Lazy-fetched — same path as `like`. See [Post Text Limits](#post-text-limits).
 
 ---
 
@@ -353,7 +365,6 @@ Note: For mentions, `uri` is the mentioning post (actor's post) and there is no 
 **Trigger:** `app.bsky.feed.repost` record created with `via` field pointing to another repost
 
 **Jetstream Event:**
-
 ```json
 {
   "did": "did:plc:dave",
@@ -383,7 +394,6 @@ Note: For mentions, `uri` is the mentioning post (actor's post) and there is no 
 **Target DID extraction:** `record.via.uri` → authority part → `did:plc:carol` (the original reposter)
 
 **Push Payload:**
-
 ```json
 {
   "to": "<push-token>",
@@ -393,10 +403,13 @@ Note: For mentions, `uri` is the mentioning post (actor's post) and there is no 
     "subject": "at://did:plc:bob/app.bsky.feed.post/postid123",
     "actorDid": "did:plc:dave",
     "actorDisplayName": "Dave",
-    "actorHandle": "dave.bsky.social"
+    "actorHandle": "dave.bsky.social",
+    "reasonSubject": "Hello world"
   }
 }
 ```
+
+**Post text:** Lazy-fetched — same path as `like`. See [Post Text Limits](#post-text-limits).
 
 ---
 
@@ -405,7 +418,6 @@ Note: For mentions, `uri` is the mentioning post (actor's post) and there is no 
 **Trigger:** `app.bsky.graph.verification` record created
 
 **Jetstream Event:**
-
 ```json
 {
   "did": "did:plc:verifier-authority",
@@ -428,7 +440,6 @@ Note: For mentions, `uri` is the mentioning post (actor's post) and there is no 
 **Target DID extraction:** `record.subject` → `did:plc:bob`
 
 **Push Payload:**
-
 ```json
 {
   "to": "<push-token>",
@@ -444,6 +455,8 @@ Note: For mentions, `uri` is the mentioning post (actor's post) and there is no 
 
 Note: The gateway stores verification records (verifier + rkey → subject) in SQLite to support the `unverified` delete case. No trusted verifier validation is performed — all verification create/delete events from Jetstream are processed.
 
+**Post text:** Not applicable — verification has no associated post.
+
 ---
 
 ### unverified
@@ -451,7 +464,6 @@ Note: The gateway stores verification records (verifier + rkey → subject) in S
 **Trigger:** `app.bsky.graph.verification` record deleted
 
 **Jetstream Event:**
-
 ```json
 {
   "did": "did:plc:verifier-authority",
@@ -467,7 +479,6 @@ Note: The gateway stores verification records (verifier + rkey → subject) in S
 **Target DID extraction:** Looked up from stored verification records by verifier DID + rkey.
 
 **Push Payload:**
-
 ```json
 {
   "to": "<push-token>",
@@ -480,6 +491,29 @@ Note: The gateway stores verification records (verifier + rkey → subject) in S
   }
 }
 ```
+
+**Post text:** Not applicable — verification removal has no associated post.
+
+---
+
+## Post Text Limits
+
+For `reply`, `quote`, `mention`, `like`, `repost`, `like-via-repost`, and `repost-via-repost` the gateway includes the relevant post body as `data.reasonSubject` and uses it in the rendered `body`.
+
+**Sourcing.**
+
+- `reply` / `quote` / `mention` — text comes straight from `record.text` in the Jetstream commit. No extra fetch.
+- `like` / `repost` / `like-via-repost` / `repost-via-repost` — text is **lazy-fetched** from the AppView's `app.bsky.feed.getPosts` endpoint using the `subject` URI. The fetch happens **after** all delivery gates pass (target is registered, actor is not blocked, push tokens exist) — we never fetch for a notification we wouldn't send. Results are cached in an in-memory LRU. Negative results (deleted / not visible / fetch error) are also cached for a shorter window so subsequent likes/reposts of the same post don't refetch. On any failure the notification is still sent — `reasonSubject` is just omitted.
+
+**Sanitization.** Newlines (`\n`, `\r`) and tabs are replaced with single spaces; runs of whitespace are collapsed; leading/trailing whitespace is trimmed. The result is a single line suitable for a lockscreen.
+
+**Truncation.** The sanitized text is truncated to `PUSH_POST_TEXT_MAX_GRAPHEMES` codepoints (default `300`, matching Bluesky's `MAX_GRAPHEMES` post limit). If truncated, an ellipsis (`…`) is appended. Codepoint count is used as a stand-in for grapheme count; this slightly under-counts text with combining characters but reliably stays within APNS/FCM payload limits (≤ 4 KB).
+
+**Block suppression.** Notifications are dropped entirely when a block exists between the actor and target — see [Block Suppression](#block-suppression). The post text is never fetched in that case.
+
+**Disabling.** Set `PUSH_POST_TEXT_FETCH=false` to turn off lazy fetching entirely. Reply / quote / mention will still carry their inline text from Jetstream; like / repost variants will simply omit `reasonSubject`.
+
+**Configuration.** See the [README](../README.md#configuration) for `PUSH_APPVIEW_URL`, `PUSH_POST_TEXT_FETCH`, `PUSH_POST_TEXT_CACHE_SIZE`, and `PUSH_POST_TEXT_MAX_GRAPHEMES`.
 
 ---
 
@@ -494,7 +528,6 @@ A user you subscribed to (via the bell icon) posted a new status.
 **Subscription API (server-side, not a record):**
 
 `app.bsky.notification.putActivitySubscription` input:
-
 ```json
 {
   "subject": "did:plc:someone",
@@ -508,7 +541,6 @@ A user you subscribed to (via the bell icon) posted a new status.
 `app.bsky.notification.listActivitySubscriptions` returns the user's subscriptions (authenticated).
 
 **How to implement (if desired):**
-
 1. Implement `app.bsky.notification.putActivitySubscription` XRPC endpoint on the gateway
 2. Store subscriptions in SQLite:
    ```sql
@@ -524,7 +556,7 @@ A user you subscribed to (via the bell icon) posted a new status.
 4. Fan out `subscribed-post` notifications to all subscribers
 5. Implement `listActivitySubscriptions` so the client can display current state
 
-**Conclusion:** Implementable but requires the gateway to become stateful for subscriptions. The client must call `putActivitySubscription` against _our_ gateway (not the AppView), and the gateway must index all `app.bsky.feed.post` events for subscribed authors. This is a significant architectural addition.
+**Conclusion:** Implementable but requires the gateway to become stateful for subscriptions. The client must call `putActivitySubscription` against *our* gateway (not the AppView), and the gateway must index all `app.bsky.feed.post` events for subscribed authors. This is a significant architectural addition.
 
 ---
 
@@ -533,7 +565,6 @@ A user you subscribed to (via the bell icon) posted a new status.
 Someone joined Bluesky via your starter pack.
 
 **Starter pack record** (`app.bsky.graph.starterpack`):
-
 ```json
 {
   "did": "did:plc:creator",
@@ -556,8 +587,7 @@ Someone joined Bluesky via your starter pack.
 }
 ```
 
-**Why not implementable via Jetstream:** The starter pack _record_ is visible in Jetstream, but the _join event_ is not. When a new user signs up through a starter pack link, the Bluesky server internally:
-
+**Why not implementable via Jetstream:** The starter pack *record* is visible in Jetstream, but the *join event* is not. When a new user signs up through a starter pack link, the Bluesky server internally:
 1. Creates the new account
 2. Adds the user to the starter pack's underlying list
 3. Synthesizes a `starterpack-joined` notification for the pack creator
@@ -583,7 +613,6 @@ A contact from your address book joined Bluesky.
 All notification types are suppressed if a block exists between the actor and the target (in either direction). Blocks are tracked in real-time via `app.bsky.graph.block` events from Jetstream.
 
 **Jetstream Event (block created):**
-
 ```json
 {
   "did": "did:plc:alice",

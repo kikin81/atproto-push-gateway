@@ -19,6 +19,18 @@ type FCMSender struct {
 	projectID   string
 	tokenSource oauth2.TokenSource
 	client      *http.Client
+	baseURL     string // overridable in tests; defaults to the FCM API
+	dataOnly    bool   // when true, omit the notification block so the client can localize
+}
+
+// SetDataOnly controls whether Android pushes are sent as data-only messages.
+// When enabled, the top-level notification block is omitted so a client's
+// FirebaseMessagingService fires for backgrounded apps and can rewrite the
+// text (localization). The English title/body are carried in the data payload
+// as a fallback. When disabled (default), the gateway sends a notification
+// message that the OS renders directly.
+func (f *FCMSender) SetDataOnly(enabled bool) {
+	f.dataOnly = enabled
 }
 
 // NewFCMSender creates a sender from a service account JSON file path.
@@ -47,16 +59,10 @@ func newFCMSenderFromBytes(data []byte) (*FCMSender, error) {
 		return nil, fmt.Errorf("FCM service account JSON missing project_id")
 	}
 
-	// Use the type-validated constructor (CredentialsFromJSON is deprecated for
-	// callers that may load untrusted configs). We only support service-account
-	// JSON; anything else is rejected at the credential layer.
-	creds, err := google.CredentialsFromJSONWithTypeAndParams(
+	creds, err := google.CredentialsFromJSON(
 		context.Background(),
 		data,
-		google.ServiceAccount,
-		google.CredentialsParams{
-			Scopes: []string{"https://www.googleapis.com/auth/firebase.messaging"},
-		},
+		"https://www.googleapis.com/auth/firebase.messaging",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create FCM credentials: %w", err)
@@ -66,6 +72,7 @@ func newFCMSenderFromBytes(data []byte) (*FCMSender, error) {
 		projectID:   sa.ProjectID,
 		tokenSource: creds.TokenSource,
 		client:      &http.Client{Timeout: 10 * time.Second},
+		baseURL:     "https://fcm.googleapis.com",
 	}, nil
 }
 
@@ -109,18 +116,36 @@ func (f *FCMSender) Send(n Notification) error {
 	msg := fcmRequest{
 		Message: fcmMessage{
 			Token: n.Token,
-			Notification: &fcmNotification{
-				Title: n.Title,
-				Body:  n.Body,
-			},
-			Data: n.Data,
+			Data:  n.Data,
 			Android: &fcmAndroid{
 				Priority: "high",
-				Notification: &fcmAndroidNotif{
-					ChannelID: channelID,
-				},
 			},
 		},
+	}
+
+	if f.dataOnly {
+		// Data-only: no notification block (top-level or android), so FCM
+		// always wakes the client's FirebaseMessagingService — even when the
+		// app is backgrounded — letting it build a localized notification from
+		// the data fields. Carry the English title/body in data as a fallback
+		// and the channel id so the client can pick the channel itself.
+		data := make(map[string]string, len(n.Data)+3)
+		for k, v := range n.Data {
+			data[k] = v
+		}
+		data["title"] = n.Title
+		data["body"] = n.Body
+		data["channelId"] = channelID
+		msg.Message.Data = data
+	} else {
+		// Notification message: the OS renders title/body directly.
+		msg.Message.Notification = &fcmNotification{
+			Title: n.Title,
+			Body:  n.Body,
+		}
+		msg.Message.Android.Notification = &fcmAndroidNotif{
+			ChannelID: channelID,
+		}
 	}
 
 	body, err := json.Marshal(msg)
@@ -128,7 +153,7 @@ func (f *FCMSender) Send(n Notification) error {
 		return err
 	}
 
-	url := fmt.Sprintf("https://fcm.googleapis.com/v1/projects/%s/messages:send", f.projectID)
+	url := fmt.Sprintf("%s/v1/projects/%s/messages:send", f.baseURL, f.projectID)
 	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -150,13 +175,13 @@ func (f *FCMSender) Send(n Notification) error {
 				Status  string `json:"status"`
 			} `json:"error"`
 		}
-		_ = json.NewDecoder(resp.Body).Decode(&errResp)
+		json.NewDecoder(resp.Body).Decode(&errResp)
 		if errResp.Error.Status == "UNREGISTERED" || errResp.Error.Status == "NOT_FOUND" {
 			return fmt.Errorf("%w: FCM %s %s", ErrTokenInvalid, errResp.Error.Status, errResp.Error.Message)
 		}
 		return fmt.Errorf("FCM returned %d: %s (%s)", resp.StatusCode, errResp.Error.Status, errResp.Error.Message)
 	}
 
-	log.Printf("[push/fcm] sent to %s: %s", truncateToken(n.Token, 20), n.Data["reason"])
+	log.Printf("[push/fcm] sent to %s: %s", tokenForLog(n.Token), n.Data["reason"])
 	return nil
 }

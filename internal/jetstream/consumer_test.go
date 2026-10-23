@@ -2,9 +2,9 @@ package jetstream
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
-	"unicode/utf8"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 func TestExtractDIDFromURI(t *testing.T) {
@@ -240,67 +240,96 @@ func TestParseTextOnlyPost(t *testing.T) {
 	}
 }
 
-func TestTruncateBody(t *testing.T) {
-	if got := truncateBody("  hello  "); got != "hello" {
-		t.Errorf("truncateBody trims: got %q", got)
+func TestZstdDecoderRejectsOversizedFrame(t *testing.T) {
+	// A 4 MiB zero-filled payload compresses to a few KiB but must be
+	// rejected by a consumer capped at 1 MiB decompressed.
+	payload := make([]byte, 4<<20)
+	enc, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatalf("encoder: %v", err)
 	}
-	if got := truncateBody("   "); got != "" {
-		t.Errorf("truncateBody blank → empty: got %q", got)
+	compressed := enc.EncodeAll(payload, nil)
+	enc.Close()
+
+	capped := &Consumer{maxDecompressedBytes: 1 << 20}
+	dec, err := capped.newZstdDecoder()
+	if err != nil {
+		t.Fatalf("decoder: %v", err)
 	}
-	short := "a short post"
-	if got := truncateBody(short); got != short {
-		t.Errorf("truncateBody leaves short text: got %q", got)
+	defer dec.Close()
+	if _, err := dec.DecodeAll(compressed, nil); err == nil {
+		t.Error("expected error decoding 4 MiB frame with 1 MiB cap, got nil")
 	}
 
-	long := strings.Repeat("x", maxBodyRunes+50)
-	got := truncateBody(long)
-	if r := []rune(got); len(r) != maxBodyRunes+1 { // +1 for the ellipsis rune
-		t.Errorf("truncateBody length: got %d runes, want %d", len(r), maxBodyRunes+1)
+	roomy := &Consumer{maxDecompressedBytes: 8 << 20}
+	dec2, err := roomy.newZstdDecoder()
+	if err != nil {
+		t.Fatalf("decoder: %v", err)
 	}
-	if !strings.HasSuffix(got, "…") {
-		t.Errorf("truncateBody appends ellipsis: got %q", got)
+	defer dec2.Close()
+	out, err := dec2.DecodeAll(compressed, nil)
+	if err != nil {
+		t.Fatalf("expected 4 MiB frame to decode with 8 MiB cap: %v", err)
 	}
-
-	// Rune safety: multibyte runes must not be split mid-codepoint.
-	multibyte := strings.Repeat("é", maxBodyRunes+10)
-	if got := truncateBody(multibyte); !utf8.ValidString(got) {
-		t.Errorf("truncateBody produced invalid UTF-8: %q", got)
+	if len(out) != len(payload) {
+		t.Errorf("expected %d decompressed bytes, got %d", len(payload), len(out))
 	}
 }
 
-func TestNotificationContent(t *testing.T) {
-	// Quote with post text → reason line promoted to title, text is body + bodyText.
-	title, body, data := notificationContent("quote", "Alice", "alice.bsky.social", "check this out")
-	if title != "Alice quoted your post" {
-		t.Errorf("quote title: got %q", title)
+func TestSetMaxDecompressedBytes(t *testing.T) {
+	c := &Consumer{maxDecompressedBytes: defaultMaxDecompressedBytes}
+	c.SetMaxDecompressedBytes(123)
+	if c.maxDecompressedBytes != 123 {
+		t.Errorf("expected 123, got %d", c.maxDecompressedBytes)
 	}
-	if body != "check this out" || data != "check this out" {
-		t.Errorf("quote body/data: got body=%q data=%q", body, data)
+	c.SetMaxDecompressedBytes(0) // ignored
+	if c.maxDecompressedBytes != 123 {
+		t.Errorf("expected 0 to be ignored, got %d", c.maxDecompressedBytes)
+	}
+}
+
+func TestFormatNotification(t *testing.T) {
+	tests := []struct {
+		name        string
+		reason      string
+		displayName string
+		handle      string
+		postText    string
+		wantTitle   string
+		wantBody    string
+	}{
+		{"like with display name", "like", "Alice", "alice.test", "", "New like", "Alice liked your post"},
+		{"like falls back to handle", "like", "", "alice.test", "", "New like", "alice.test liked your post"},
+		{"like falls back to Someone", "like", "", "", "", "New like", "Someone liked your post"},
+		{"repost", "repost", "Alice", "", "", "New repost", "Alice reposted your post"},
+		{"reply without text", "reply", "Alice", "", "", "New reply", "Alice replied to your post"},
+		{"reply with text", "reply", "Alice", "", "Great post!", "New reply", "Alice replied: Great post!"},
+		{"mention without text", "mention", "Alice", "", "", "New mention", "Alice mentioned you"},
+		{"mention with text", "mention", "Alice", "", "Hey @bob check this", "New mention", "Alice mentioned you: Hey @bob check this"},
+		{"quote without text", "quote", "Alice", "", "", "New quote", "Alice quoted your post"},
+		{"quote with text", "quote", "Alice", "", "This is so true!", "New quote", "Alice quoted your post: This is so true!"},
+		{"like with text", "like", "Alice", "", "Cool post", "New like", "Alice liked your post: Cool post"},
+		{"repost with text", "repost", "Alice", "", "Cool post", "New repost", "Alice reposted your post: Cool post"},
+		{"follow ignores postText", "follow", "Alice", "", "ignored", "New follower", "Alice followed you"},
+		{"follow", "follow", "Alice", "", "", "New follower", "Alice followed you"},
+		{"like-via-repost", "like-via-repost", "Alice", "", "", "New like", "Alice liked a post you reposted"},
+		{"like-via-repost with text", "like-via-repost", "Alice", "", "Cool post", "New like", "Alice liked a post you reposted: Cool post"},
+		{"repost-via-repost", "repost-via-repost", "Alice", "", "", "New repost", "Alice reposted a post you reposted"},
+		{"repost-via-repost with text", "repost-via-repost", "Alice", "", "Cool post", "New repost", "Alice reposted a post you reposted: Cool post"},
+		{"verified has no actor", "verified", "Alice", "", "", "Verified", "Your account has been verified"},
+		{"unverified has no actor", "unverified", "Alice", "", "", "Verification removed", "Your account verification was removed"},
+		{"unknown reason", "something-new", "Alice", "", "", "Notification", "Alice"},
 	}
 
-	// Reply with text.
-	if title, body, data := notificationContent("reply", "Bob", "", "nice"); title != "Bob replied to your post" || body != "nice" || data != "nice" {
-		t.Errorf("reply: got title=%q body=%q data=%q", title, body, data)
-	}
-
-	// Like (no post text) → unchanged template, no bodyText.
-	title, body, data = notificationContent("like", "Bob", "bob.bsky.social", "")
-	if title != "New like" || body != "Bob liked your post" || data != "" {
-		t.Errorf("like: got title=%q body=%q data=%q", title, body, data)
-	}
-
-	// Quote with whitespace-only text → falls back to the templated line, no bodyText.
-	title, body, data = notificationContent("quote", "Alice", "", "   ")
-	if title != "New quote" || body != "Alice quoted your post" || data != "" {
-		t.Errorf("blank quote text fallback: got title=%q body=%q data=%q", title, body, data)
-	}
-
-	// Long quote text is truncated in both body and bodyText.
-	_, body, data = notificationContent("quote", "Alice", "", strings.Repeat("y", maxBodyRunes+50))
-	if r := []rune(body); len(r) != maxBodyRunes+1 {
-		t.Errorf("long body truncation: got %d runes", len(r))
-	}
-	if body != data {
-		t.Errorf("body and bodyText must match: body=%q data=%q", body, data)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			title, body := formatNotification(tt.reason, tt.displayName, tt.handle, tt.postText)
+			if title != tt.wantTitle {
+				t.Errorf("title: got %q, want %q", title, tt.wantTitle)
+			}
+			if body != tt.wantBody {
+				t.Errorf("body: got %q, want %q", body, tt.wantBody)
+			}
+		})
 	}
 }

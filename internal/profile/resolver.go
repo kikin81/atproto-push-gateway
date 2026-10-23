@@ -11,9 +11,9 @@ import (
 )
 
 const (
-	cacheTTL       = 1 * time.Hour
-	maxCacheSize   = 10000
-	requestTimeout = 5 * time.Second
+	cacheTTL            = 1 * time.Hour
+	defaultMaxCacheSize = 10000
+	requestTimeout      = 5 * time.Second
 )
 
 type cacheEntry struct {
@@ -23,9 +23,11 @@ type cacheEntry struct {
 }
 
 type Resolver struct {
-	mu     sync.RWMutex
-	cache  map[string]cacheEntry
-	client *http.Client
+	mu           sync.RWMutex
+	cache        map[string]cacheEntry
+	maxCacheSize int
+	client       *http.Client
+	apiBaseURL   string // overridable in tests; defaults to the public AppView
 }
 
 type profileResponse struct {
@@ -35,8 +37,27 @@ type profileResponse struct {
 }
 
 func NewResolver() *Resolver {
+	return NewResolverWithCacheSize(defaultMaxCacheSize)
+}
+
+// SetAPIBaseURL overrides the AppView base URL. Must be called before any
+// ResolveProfile call. Empty values are ignored.
+func (r *Resolver) SetAPIBaseURL(u string) {
+	if u != "" {
+		r.apiBaseURL = u
+	}
+}
+
+// NewResolverWithCacheSize creates a resolver whose profile cache is capped
+// at maxCacheSize entries. Sizes <= 0 fall back to the default.
+func NewResolverWithCacheSize(maxCacheSize int) *Resolver {
+	if maxCacheSize <= 0 {
+		maxCacheSize = defaultMaxCacheSize
+	}
 	return &Resolver{
-		cache: make(map[string]cacheEntry),
+		cache:        make(map[string]cacheEntry),
+		maxCacheSize: maxCacheSize,
+		apiBaseURL:   "https://public.api.bsky.app",
 		client: &http.Client{
 			Timeout: requestTimeout,
 		},
@@ -59,7 +80,7 @@ func (r *Resolver) ResolveProfile(did string) (string, string) {
 
 	// Cache the result
 	r.mu.Lock()
-	if len(r.cache) >= maxCacheSize {
+	if len(r.cache) >= r.maxCacheSize {
 		r.evictOldest()
 	}
 	r.cache[did] = cacheEntry{
@@ -86,7 +107,7 @@ func (r *Resolver) ResolveDisplayName(did string) string {
 }
 
 func (r *Resolver) fetchProfile(did string) (string, string) {
-	reqURL := fmt.Sprintf("https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor=%s", url.QueryEscape(did))
+	reqURL := fmt.Sprintf("%s/xrpc/app.bsky.actor.getProfile?actor=%s", r.apiBaseURL, url.QueryEscape(did))
 
 	resp, err := r.client.Get(reqURL)
 	if err != nil {
