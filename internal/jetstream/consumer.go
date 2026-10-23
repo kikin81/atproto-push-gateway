@@ -692,6 +692,17 @@ func reasonFetchesSubjectText(reason string) bool {
 	return false
 }
 
+// carriesActorPostText reports whether postText for this reason is the
+// notifying actor's own post (taken from the Jetstream commit) rather than a
+// lazily fetched subject post. Only these reasons populate bodyText.
+func carriesActorPostText(reason string) bool {
+	switch reason {
+	case "reply", "quote", "mention":
+		return true
+	}
+	return false
+}
+
 func formatNotification(reason, actorDisplayName, actorHandle, postText string) (string, string) {
 	title := reasonTitles[reason]
 	if title == "" {
@@ -779,6 +790,14 @@ func (c *Consumer) sendNotification(actorDID, targetDID, reason, recordURI, subj
 		}
 		if postText != "" {
 			n.Data["reasonSubject"] = postText
+		}
+		// Nubecita client contract (PushPayload.bodyText): the notifying
+		// post's own text, for reply/quote/mention only. Carried alongside
+		// upstream's reasonSubject (which also holds the subject post's text
+		// for like/repost) so clients built against the fork keep rendering
+		// the expanded notification body.
+		if postText != "" && carriesActorPostText(reason) {
+			n.Data["bodyText"] = postText
 		}
 
 		if err := c.sender.Send(n); err != nil {
