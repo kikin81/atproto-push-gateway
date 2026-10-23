@@ -28,7 +28,14 @@ jobs:
           # commitlint needs full history to find the commit range.
           fetch-depth: 0
       - uses: open-turo/action-setup-tools@v3
+      # commitlint runs on pull requests only. On a push event the action derives
+      # the commit range with `git remote -v | grep push`, which also matches the
+      # (fetch) line because this repo's name contains "push"; the doubled URL
+      # makes `git show-ref` fail and `set -e` aborts the step silently. Commits
+      # are already linted when their PR runs.
       - uses: open-turo/action-pre-commit@v3
+        with:
+          disable-commitlint: ${{ github.event_name != 'pull_request' }}
 
   # Runs all go tests with -race + coverage.
   test:
