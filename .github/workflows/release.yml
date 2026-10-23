@@ -18,8 +18,6 @@ jobs:
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
-        with:
-          release-type: go
 
   docker:
     needs: release-please
@@ -39,8 +37,8 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=semver,pattern={{version}},value=${{ needs.release-please.outputs.tag_name }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ needs.release-please.outputs.tag_name }}
+            type=semver,pattern={{version}},value=${{ needs.release-please.outputs.tag_name }},match=^nubecita-v(.+)$
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.release-please.outputs.tag_name }},match=^nubecita-v(.+)$
             type=raw,value=latest
 
       - uses: docker/build-push-action@v6
